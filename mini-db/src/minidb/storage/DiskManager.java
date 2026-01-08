@@ -36,7 +36,7 @@ public class DiskManager {
 
     public void writePage(Page page){
         try {
-            long offset = page.getPageId() * Page.PAGE_SIZE;
+            long offset = (long)page.getPageId() * Page.PAGE_SIZE;
             dbFile.seek(offset);
             dbFile.write(page.getData(), 0, Page.PAGE_SIZE);
         }catch (IOException e){

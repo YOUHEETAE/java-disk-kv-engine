@@ -1,5 +1,7 @@
-package minidb.storage;
+package minidb.test;
 
+import minidb.storage.DiskManager;
+import minidb.storage.Page;
 import org.junit.jupiter.api.*;
 
 import java.nio.file.Files;
