@@ -29,17 +29,19 @@ public class CacheManager {
     public void putPage(Page page) {
         page.markDirty();
         cache.put(page.getPageId(),page);
-        diskManager.writePage(page);
+    }
+
+    public void flush() {
+        for (Page page : cache.values()) {
+            if(page.isDirty()){
+            diskManager.writePage(page);
+            page.clearDirty();
+            }
+        }
     }
 
     public void close() {
-        // 1. dirty page flush
-        for (Page page : cache.values()) {
-            if (page.isDirty()) {
-                diskManager.writePage(page);
-            }
-        }
-        // 2. disk close
+        flush();
         diskManager.close();
     }
 }

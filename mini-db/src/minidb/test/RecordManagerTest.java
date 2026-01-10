@@ -28,6 +28,7 @@ class RecordManagerTest {
     }
     @AfterEach
     void cleanup() throws Exception {
+        cacheManager.flush();
         diskManager.close();
         Thread.sleep(1000);
         Files.deleteIfExists(Path.of(TEST_FILE));
@@ -73,6 +74,49 @@ class RecordManagerTest {
        assertEquals("Alice", new String(result1));
        assertEquals("Bob", new String(result2));
        assertEquals("john", new String(result3));
+    }
+    @Test
+    void testSlottedPageMultipleRecords() {
+        // 같은 Page에 여러 레코드
+        recordManager.put("user:1001", "Alice".getBytes());
+        recordManager.put("user:1002", "Bob".getBytes());
+        recordManager.put("user:1003", "Charlie".getBytes());
+
+        assertEquals("Alice", new String(recordManager.get("user:1001")));
+        assertEquals("Bob", new String(recordManager.get("user:1002")));
+        assertEquals("Charlie", new String(recordManager.get("user:1003")));
+    }
+
+    @Test
+    void testOverwriteWithSlottedPage() {
+        // 덮어쓰기 (최신 값 확인)
+        recordManager.put("user:1001", "Alice".getBytes());
+        recordManager.put("user:1001", "Bob".getBytes());
+        recordManager.put("user:1001", "Charlie".getBytes());
+
+        assertEquals("Charlie", new String(recordManager.get("user:1001")));
+    }
+    @Test
+    void testPageOverflow() {
+        for (int i = 0; i < 100; i++) {
+            String key = "key" + i;
+            String value = "value_very_long_string_" + i + "_".repeat(50);
+
+            recordManager.put(key, value.getBytes());
+        }
+        for (int i = 0; i < 100; i++) {
+            String key = "key" + i;
+            byte[] result = recordManager.get(key);
+
+            assertNotNull(result);
+            assertTrue(new String(result).startsWith("value_very_long_string_" + i));
+        }
+    }
+    @Test
+    void testSimple() {
+        recordManager.put("key1", "value1".getBytes());
+        byte[] result = recordManager.get("key1");
+        assertEquals("value1", new String(result));
     }
 
 }
