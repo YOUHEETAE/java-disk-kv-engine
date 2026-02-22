@@ -4,6 +4,9 @@ import minidb.buffer.CacheManager;
 import minidb.storage.Page;
 
 import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class RecordManager {
     private static final int OFFSET_RECORD_COUNT = 0;
@@ -17,9 +20,11 @@ public class RecordManager {
 
     private final CacheManager cacheManager;
     private static final int MAX_PAGES = 1000;
+    private final Map<String, RecordId> index;
 
     public RecordManager(CacheManager cacheManager) {
         this.cacheManager = cacheManager;
+        this.index = new HashMap<>();
     }
 
     private int getPageId(String key) {
@@ -35,11 +40,14 @@ public class RecordManager {
             initializePage(page);
         }
 
-        writeRecord(page, key, value);
+        int slotId = writeRecord(page, key, value);
         cacheManager.putPage(page);
+
+        RecordId rid = new RecordId(pageId, slotId);
+        index.put(key, rid);
     }
 
-    private void writeRecord(Page page, String key, byte[] value) {
+    private int writeRecord(Page page, String key, byte[] value) {
         int recordCount = getRecordCount(page);
         int freeSpaceStart = getFreeSpaceStart(page);
 
@@ -58,8 +66,7 @@ public class RecordManager {
            if(!isInitialized(overflowPage)) {
                initializePage(overflowPage);
            }
-           writeRecord(overflowPage, key, value);
-           return;
+           return writeRecord(overflowPage, key, value);
         }
 
         ByteBuffer buffer = page.buffer();
@@ -75,43 +82,36 @@ public class RecordManager {
         setFreeSpaceStart(page, newOffset);
 
         page.markDirty();
+        return recordCount;
     }
 
     public byte[] get(String key) {
-        int pageId = getPageId(key);
-        Page page = cacheManager.getPage(pageId);
-        return readRecord(page, key);
+        RecordId rid = index.get(key);
+        if (rid == null) {
+            return null;
+        }
+        Page page = cacheManager.getPage(rid.getPageId());
+        return readRecordBySlot(page, rid.getSlotId());
     }
-    private byte[] readRecord(Page page, String key) {
+    private byte[] readRecordBySlot(Page page, int slotId) {
         if (!isInitialized(page)) {
             return null;
         }
         int recordCount = getRecordCount(page);
+        if(slotId < 0 || slotId >= recordCount){
+            return null;
+        }
+        int offset = getSlotOffset(page, slotId);
         ByteBuffer buffer = page.buffer();
+        buffer.position(offset);
 
-        for (int i = recordCount - 1; i >= 0; i--) {
-            int offset = getSlotOffset(page, i);
+        int keyLength = buffer.getInt();
+        buffer.position(buffer.position() + keyLength);
 
-            buffer.position(offset);
-            int keyLength = buffer.getInt();
-            byte[] keyBytes = new byte[keyLength];
-            buffer.get(keyBytes);
-            String storedKey = new String(keyBytes);
-
-            if (storedKey.equals(key)) {
-                int valueLength = buffer.getInt();
-                byte[] valueBytes = new byte[valueLength];
-                buffer.get(valueBytes);
-                return valueBytes;
-            }
-        }
-        int overflowPageId = getOverflowPageId(page);
-
-        if (overflowPageId != NO_OVERFLOW && overflowPageId != page.getPageId()) {
-            Page overflowPage = cacheManager.getPage(overflowPageId);
-            return readRecord(overflowPage, key);
-        }
-        return null;
+        int valueLength = buffer.getInt();
+        byte[] value = new byte[valueLength];
+        buffer.get(value);
+        return  value;
     }
 
     private int getRecordCount(Page page) {

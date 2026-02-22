@@ -119,4 +119,105 @@ class RecordManagerTest {
         assertEquals("value1", new String(result));
     }
 
+    @Test
+    void testIndexBasedO1Access() {
+        recordManager.put("user:1001", "Alice".getBytes());
+        recordManager.put("user:1002", "Bob".getBytes());
+        recordManager.put("user:1003", "Charlie".getBytes());
+
+        byte[] result1 = recordManager.get("user:1001");
+        byte[] result2 = recordManager.get("user:1002");
+        byte[] result3 = recordManager.get("user:1003");
+
+        assertEquals("Alice", new String(result1));
+        assertEquals("Bob", new String(result2));
+        assertEquals("Charlie", new String(result3));
+    }
+
+    @Test
+    void testNonExistentKeyReturnsNull() {
+        recordManager.put("key1", "value1".getBytes());
+
+        byte[] result = recordManager.get("nonexistent");
+
+        assertNull(result);
+    }
+
+    @Test
+    void testOverwriteUpdatesIndex() {
+        recordManager.put("key1", "value1".getBytes());
+        recordManager.put("key1", "value2".getBytes());
+        recordManager.put("key1", "value3".getBytes());
+
+        byte[] result = recordManager.get("key1");
+
+        assertEquals("value3", new String(result));
+    }
+
+    @Test
+    void testPerformanceO1vsOn() {
+        int count = 1000;
+
+        long startPut = System.nanoTime();
+        for (int i = 0; i < count; i++) {
+            recordManager.put("key" + i, ("value" + i).getBytes());
+        }
+        long endPut = System.nanoTime();
+
+        long startGet = System.nanoTime();
+        for (int i = 0; i < count; i++) {
+            byte[] result = recordManager.get("key" + i);
+            assertNotNull(result);
+            assertEquals("value" + i, new String(result));
+        }
+        long endGet = System.nanoTime();
+
+        long putMs = (endPut - startPut) / 1_000_000;
+        long getMs = (endGet - startGet) / 1_000_000;
+
+        System.out.println("=== Performance Test ===");
+        System.out.println("1000 puts: " + putMs + "ms");
+        System.out.println("1000 gets: " + getMs + "ms");
+        System.out.println("Avg get:   " + (getMs / (double)count) + "ms");
+
+        assertTrue(getMs < 100, "1000 O(1) reads should complete < 100ms");
+    }
+
+    @Test
+    void testOverflowChainWithIndex() {
+        for (int i = 0; i < 100; i++) {
+            String key = "key" + i;
+            String value = "long_value_" + i + "_".repeat(50);
+            recordManager.put(key, value.getBytes());
+        }
+
+        for (int i = 0; i < 100; i++) {
+            String key = "key" + i;
+            byte[] result = recordManager.get(key);
+
+            assertNotNull(result);
+            assertTrue(new String(result).startsWith("long_value_" + i));
+        }
+    }
+
+    @Test
+    void testMixedOperations() {
+        recordManager.put("a", "1".getBytes());
+        recordManager.put("b", "2".getBytes());
+
+        assertEquals("1", new String(recordManager.get("a")));
+        assertEquals("2", new String(recordManager.get("b")));
+
+        recordManager.put("a", "3".getBytes());
+
+        assertEquals("3", new String(recordManager.get("a")));
+        assertEquals("2", new String(recordManager.get("b")));
+
+        recordManager.put("c", "4".getBytes());
+
+        assertEquals("3", new String(recordManager.get("a")));
+        assertEquals("2", new String(recordManager.get("b")));
+        assertEquals("4", new String(recordManager.get("c")));
+    }
+
 }
