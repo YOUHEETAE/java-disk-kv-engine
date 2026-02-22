@@ -1,100 +1,89 @@
-# Buffer Module
+# Buffer 모듈
 
-In-memory page caching layer with Write-Back strategy.
+Write-Back 전략을 사용하는 메모리 내 페이지 캐싱 계층
 
-## 📦 Classes
+## 클래스
 
-### `CacheManager.java`
+### CacheManager.java
 
-Manages page cache between API layer and disk.
+API 계층과 디스크 사이의 페이지 캐시 관리
 
-**Responsibilities:**
-- Cache pages in memory (unlimited for now)
-- Write-Back caching (defer disk writes)
-- Batch flush dirty pages
+**책임:**
+- 메모리에 페이지 캐싱 (현재 무제한)
+- Write-Back 캐싱 (디스크 쓰기 지연)
+- Dirty 페이지 일괄 플러시
 
-**Key Methods:**
+**주요 메서드:**
 ```java
-Page getPage(int pageId)     // Get from cache or disk
-void putPage(Page page)      // Mark dirty, don't write
-void flush()                 // Write all dirty pages
-void close()                 // Flush and close disk
+Page getPage(int pageId)     // 캐시 또는 디스크에서 가져오기
+void putPage(Page page)      // Dirty 마킹, 디스크에 즉시 쓰지 않음
+void flush()                 // 모든 dirty 페이지 디스크에 쓰기
+void close()                 // 플러시 후 디스크 닫기
 ```
 
-**Cache Strategy:**
+**캐시 전략:**
 ```
-┌─────────┐
-│ getPage │ → Check cache → Hit? Return
-│         │              → Miss? Read from disk, cache, return
-└─────────┘
+getPage:
+  캐시 확인 → Hit? 반환
+            → Miss? 디스크 읽기, 캐시에 저장, 반환
 
-┌─────────┐
-│ putPage │ → Mark dirty
-│         │ → Store in cache
-│         │ → Don't write to disk!
-└─────────┘
+putPage:
+  Dirty 마킹
+  캐시에 저장
+  디스크에 즉시 쓰지 않음
 
-┌─────────┐
-│  flush  │ → For each dirty page:
-│         │     Write to disk
-│         │     Clear dirty flag
-└─────────┘
+flush:
+  각 dirty 페이지마다:
+    디스크에 쓰기
+    Dirty 플래그 제거
 ```
 
----
+## 핵심 개념
 
-## 🔑 Key Concepts
+### Write-Back vs Write-Through
 
-**Write-Back vs Write-Through:**
+| 전략 | 동작 | 성능 |
+|------|------|------|
+| Write-Through | 즉시 디스크에 쓰기 | 느림 (쓰기마다 디스크 I/O) |
+| Write-Back | 메모리에만 쓰고 나중에 플러시 | 빠름 (일괄 디스크 I/O) |
 
-| Strategy | Behavior | Performance |
-|----------|----------|-------------|
-| **Write-Through** | Write to disk immediately | Slow (every write = disk I/O) |
-| **Write-Back** | Write to memory, flush later | Fast (batched disk I/O) |
+**현재 구현:**
+- Write-Back 활성화
+- 수동 플러시 (flush() 또는 close() 호출)
+- 크기 제한 없음 (무제한 캐시)
+- Eviction 정책 없음
 
-**Current Implementation:**
-- ✅ Write-Back enabled
-- ✅ Manual flush (call `flush()` or `close()`)
-- ❌ No size limit (unlimited cache)
-- ❌ No eviction policy (yet)
+## 성능 영향
 
----
-
-## 📈 Performance Impact
-
-**Before (Write-Through):**
+### Write-Through (이전)
 ```
-100 writes → 100 disk I/O → 500ms
+100 쓰기 → 100 디스크 I/O → 500ms
 ```
 
-**After (Write-Back):**
+### Write-Back (현재)
 ```
-100 writes → 100 memory writes → 50ms
-1 flush → 1 batch disk I/O → 50ms
-Total: 100ms
+100 쓰기 → 100 메모리 쓰기 → 50ms
+1 플러시 → 1 일괄 디스크 I/O → 50ms
+총: 100ms
 ```
 
----
+## 향후 개선
 
-## 🚧 Future Improvements
+### Buffer Pool (계획)
+- 캐시 크기 제한 (예: 100 페이지)
+- LRU eviction 정책
+- Dirty 페이지 eviction 시 디스크 쓰기
 
-**Buffer Pool (planned):**
-- Limit cache size (e.g., 100 pages)
-- LRU eviction policy
-- Evict dirty pages → write to disk
-
-**Example:**
+**예시:**
 ```java
-// Future API
-CacheManager cache = new CacheManager(diskManager, 100); // Max 100 pages
+// 미래 API
+CacheManager cache = new CacheManager(diskManager, 100); // 최대 100 페이지
 
-cache.getPage(1000); // If cache full, evict LRU page
+cache.getPage(1000); // 캐시 가득 차면 LRU 페이지 evict
 ```
 
----
+## 의존성
 
-## 🔗 Dependencies
-
-- `minidb.storage.DiskManager` - Disk operations
-- `minidb.storage.Page` - Page objects
-- `java.util.HashMap` - Cache storage# Buffer Module
+- minidb.storage.DiskManager - 디스크 연산
+- minidb.storage.Page - 페이지 객체
+- java.util.HashMap - 캐시 저장소

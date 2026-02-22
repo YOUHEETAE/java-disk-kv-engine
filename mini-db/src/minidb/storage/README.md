@@ -1,54 +1,52 @@
-# Storage Module
+# Storage 모듈
 
-Disk-based page storage layer.
+디스크 기반 페이지 저장 계층
 
-## 📦 Classes
+## 클래스
 
-### `Page.java`
+### Page.java
 
-Represents a single 4KB page in memory.
+메모리 내 4KB 페이지를 나타냄
 
-**Structure:**
-- Fixed size: 4096 bytes
-- Contains header, slots, and records
-- Dirty flag for Write-Back caching
+**구조:**
+- 고정 크기: 4096 bytes
+- 헤더, 슬롯, 레코드 포함
+- Write-Back 캐싱을 위한 dirty 플래그
 
-**Key Methods:**
+**주요 메서드:**
 ```java
-int getPageId()          // Get page number
-byte[] getData()         // Get raw byte array
-ByteBuffer buffer()      // Get ByteBuffer wrapper
-boolean isDirty()        // Check if modified
-void markDirty()         // Mark as modified
-void clearDirty()        // Clear dirty flag
+int getPageId()          // 페이지 번호 반환
+byte[] getData()         // 원시 바이트 배열 반환
+ByteBuffer buffer()      // ByteBuffer 래퍼 반환
+boolean isDirty()        // 수정 여부 확인
+void markDirty()         // 수정됨으로 표시
+void clearDirty()        // Dirty 플래그 제거
 ```
 
-**Usage:**
+**사용 예:**
 ```java
 Page page = new Page(0);
 page.markDirty();
 byte[] data = page.getData();
 ```
 
----
+### DiskManager.java
 
-### `DiskManager.java`
+물리적 디스크 I/O 연산 처리
 
-Handles physical disk I/O operations.
+**책임:**
+- 디스크에서 페이지 읽기
+- 디스크에 페이지 쓰기
+- 파일 핸들 관리
 
-**Responsibilities:**
-- Read pages from disk
-- Write pages to disk
-- Manage file handle
-
-**Key Methods:**
+**주요 메서드:**
 ```java
-Page readPage(int pageId)    // Read from disk
-void writePage(Page page)    // Write to disk
-void close()                 // Close file handle
+Page readPage(int pageId)    // 디스크에서 읽기
+void writePage(Page page)    // 디스크에 쓰기
+void close()                 // 파일 핸들 닫기
 ```
 
-**File Layout:**
+**파일 레이아웃:**
 ```
 Offset = pageId × 4096
 
@@ -58,47 +56,43 @@ Page 2: bytes 8192-12287
 ...
 ```
 
-**Usage:**
+**사용 예:**
 ```java
 DiskManager dm = new DiskManager("data.db");
 
-// Read
+// 읽기
 Page page = dm.readPage(5);
 
-// Write
+// 쓰기
 dm.writePage(page);
 
-// Close
+// 닫기
 dm.close();
 ```
 
----
+## 핵심 개념
 
-## 🔑 Key Concepts
+### 페이지 기반 저장
 
-**Page-based Storage:**
-- Disk I/O operates in fixed-size chunks
-- Reduces number of disk operations
-- Aligns with OS page size
+- 디스크 I/O는 고정 크기 청크 단위로 동작
+- 디스크 연산 횟수 감소
+- OS 페이지 크기와 정렬
 
-**Why 4KB?**
-- Common OS page size
-- Good balance between overhead and utilization
-- Industry standard (MySQL, PostgreSQL use 8KB-16KB)
+### 왜 4KB인가?
 
----
+- 일반적인 OS 페이지 크기
+- 오버헤드와 활용도의 균형
+- 업계 표준 (MySQL, PostgreSQL은 8KB-16KB 사용)
 
-## 📊 Trade-offs
+## 트레이드오프
 
-| Aspect | Choice | Reason |
-|--------|--------|--------|
-| **Page Size** | 4KB | Simple, OS-aligned |
-| **File Format** | Sequential pages | Easy random access |
-| **Buffering** | None (here) | Handled by CacheManager |
+| 측면 | 선택 | 이유 |
+|------|------|------|
+| 페이지 크기 | 4KB | 단순, OS 정렬 |
+| 파일 형식 | 순차 페이지 | 쉬운 랜덤 접근 |
+| 버퍼링 | 없음 (여기서는) | CacheManager에서 처리 |
 
----
+## 의존성
 
-## 🔗 Dependencies
-
-- `java.io.RandomAccessFile` - File I/O
-- `java.nio.ByteBuffer` - Memory management
+- java.io.RandomAccessFile - 파일 I/O
+- java.nio.ByteBuffer - 메모리 관리
