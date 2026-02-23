@@ -40,6 +40,10 @@ public class CacheManager {
         }
     }
 
+    public void clearCache() {
+        cache.clear();
+    }
+
     public void close() {
         flush();
         diskManager.close();

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -218,6 +219,23 @@ class RecordManagerTest {
         assertEquals("3", new String(recordManager.get("a")));
         assertEquals("2", new String(recordManager.get("b")));
         assertEquals("4", new String(recordManager.get("c")));
+    }
+
+    @Test
+    void testGetAllValues(){
+        recordManager.put("H00001", "value1".getBytes());
+        recordManager.put("H00002", "value2".getBytes());
+        recordManager.put("H00003", "value3".getBytes());
+
+        List<byte[]> result = recordManager.getAllValues();
+
+        assertEquals(3, result.size());
+    }
+
+    @Test
+    void testGetAllValuesEmpty(){
+        List<byte[]> result = recordManager.getAllValues();
+        assertEquals(0, result.size());
     }
 
 }

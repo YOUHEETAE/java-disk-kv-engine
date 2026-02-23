@@ -4,7 +4,9 @@ import minidb.buffer.CacheManager;
 import minidb.storage.Page;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,7 +21,7 @@ public class RecordManager {
     private static final int SLOT_SIZE           = 8;
 
     private final CacheManager cacheManager;
-    private static final int MAX_PAGES = 1000;
+    private static final int MAX_PAGES = 10000;
     private final Map<String, RecordId> index;
 
     public RecordManager(CacheManager cacheManager) {
@@ -45,6 +47,16 @@ public class RecordManager {
 
         RecordId rid = new RecordId(pageId, slotId);
         index.put(key, rid);
+    }
+
+    public List<byte[]> getAllValues() {
+        List<byte[]> result = new ArrayList<>();
+        for(String key : index.keySet()){
+            byte[] value = get(key);
+            if(value != null)
+                result.add(value);
+        }
+        return result;
     }
 
     private int writeRecord(Page page, String key, byte[] value) {
