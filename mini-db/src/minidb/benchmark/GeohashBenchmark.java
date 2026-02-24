@@ -1,7 +1,8 @@
 package minidb.benchmark;
 
-import minidb.api.RecordManager;
+import minidb.api.SpatialRecordManager;
 import minidb.buffer.CacheManager;
+import minidb.index.GeoHashIndex;
 import minidb.storage.DiskManager;
 import minidb.util.GeoUtils;
 
@@ -11,8 +12,8 @@ import java.util.List;
 
 import static minidb.benchmark.DummyDataGenerator.generateDummyList;
 
-public class FullScanBenchmark {
-    private final static String TEST_DB = "miniDb";
+public class GeohashBenchmark {
+    private final static String TEST_DB = "geoHashDb";
 
     public static void main(String[] args) throws Exception {
 
@@ -20,24 +21,21 @@ public class FullScanBenchmark {
         CacheManager cacheManager = null;
 
         try {
-            System.out.println("generating full scan dummy data");
+            System.out.println("generating geohash dummy data");
             List<Hospital> hospitals = generateDummyList(79081);
-            System.out.println("generating " + hospitals.size() + "dummy data");
+            System.out.println("generating " + hospitals.size() + " dummy data");
 
             diskManager = new DiskManager(TEST_DB);
             cacheManager = new CacheManager(diskManager);
-            RecordManager recordManager = new RecordManager(cacheManager);
-
+            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
 
             long startTime = System.currentTimeMillis();
             for (Hospital hospital : hospitals) {
-                String hospitalId = hospital.hospitalCode;
-                byte[] hospitalData = Hospital.toBytes(hospital);
-                recordManager.put(hospitalId, hospitalData);
+                spatialRecordManager.put(hospital.coordinateY, hospital.coordinateX, Hospital.toBytes(hospital));
             }
             long endTime = System.currentTimeMillis();
             long insertTime = endTime - startTime;
-            System.out.println("full scan dummy data inserted in " + insertTime + " ms");
+            System.out.println("geohash dummy data inserted in " + insertTime + " ms");
 
             cacheManager.flush();
             cacheManager.clearCache();
@@ -48,9 +46,12 @@ public class FullScanBenchmark {
 
             long searchStart = System.currentTimeMillis();
 
+            List<byte[]> candidates = spatialRecordManager.searchRadius(searchLat, searchLng, radiusKm);
+            System.out.println("후보 수 (원형 필터링 전): " + candidates.size() + "건");
+
             int count = 0;
 
-            for (byte[] values : recordManager.getAllValues()) {
+            for (byte[] values : candidates) {
                 Hospital hospital = Hospital.fromBytes("", values);
                 double distance = GeoUtils.haversine(searchLat, searchLng, hospital.coordinateY, hospital.coordinateX);
 
@@ -60,10 +61,8 @@ public class FullScanBenchmark {
             }
 
             long searchEnd = System.currentTimeMillis();
-            System.out.println("Full Scan 검색: " + (searchEnd - searchStart) + "ms");
+            System.out.println("GeoHash 검색: " + (searchEnd - searchStart) + "ms");
             System.out.println("결과: " + count + "건");
-
-
 
         } finally {
             if (cacheManager != null) cacheManager.close();

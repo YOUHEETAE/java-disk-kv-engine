@@ -6,7 +6,8 @@ import java.util.Random;
 
 public class DummyDataGenerator {
 
-    private static final Random RANDOM = new Random();
+    private static final long SEED = 42L;
+    private static final Random RANDOM = new Random(SEED);
     private static final String[] DISTRICTS = {"Gangnam", "Seocho", "Jongno", "Yongsan", "Mapo"};
     private static final String[] PROVINCES = {"Seoul", "Busan", "Incheon", "Daegu", "Gwangju"};
     private static final double MIN_LAT = 33.0;
