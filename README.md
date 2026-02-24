@@ -94,7 +94,10 @@ Redis 없이 공간 클러스터링만으로 달성
 
 ## 성능 결과
 
+<div align=center>
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width = "700"/>
+</div>
+
 
 - Full Scan: 데이터량에 따라 응답 시간이 선형적으로 증가 (O(N))
 - GeoHash Index: 물리적 클러스터링을 통해 데이터 규모와 무관한 일정한 성능 유지 (O(1))에 수렴
