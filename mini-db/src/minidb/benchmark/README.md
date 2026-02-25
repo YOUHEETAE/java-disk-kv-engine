@@ -41,7 +41,24 @@
 | Full Scan | 10,000 | 1 | 79,081건 |
 | 선형 범위 | 275 | 1 | 2,102건 |
 | GeoHash | 169 | 분산 | 1,379건 |
-| **Hilbert Multi-Interval** | **12** | **5** | **103건** |
+| **Hilbert Multi-Interval** | **13** | **5** | **103건** |
+
+## Page Seek Count 비교 (반경 5km, 강남 기준)
+
+| 방식 | PageId 수 | Seek Count | 비고 |
+|------|----------|-----------|------|
+| GeoHash | 169 | 720 | 분산된 랜덤 I/O |
+| **Hilbert Multi-Interval** | **13** | **124** | **순차 I/O에 가까움** |
+
+```
+Hilbert가 GeoHash 대비 Seek Count 5.8x 적음
+
+GeoHash:  [5 → 402 → 11 → 390 → ...]  ← 디스크 헤드 점프
+Hilbert:  [3766 → 3772 → 3773 → ...]  ← 순차 읽기
+```
+
+Seek Count = 인접 PageId 간 거리(|p[i+1] - p[i]|)의 합
+→ 낮을수록 순차 I/O, 높을수록 랜덤 I/O
 
 ---
 
@@ -91,7 +108,7 @@ PageId 275개, interval 1개, 후보 2,102건 ✅
 
 ```
 격자 순회 → visited[PageId] 마킹 → Interval Merge
-PageId 12개, interval 5개
+PageId 13개, interval 5개
 후보 103건 (사각형 MBR), 결과 27건 ✅
 
 원형 필터링은 프론트엔드 위임
@@ -101,7 +118,7 @@ PageId 12개, interval 5개
 **힐버트 곡선 위 interval 분포:**
 ```
 [3766], [3772~3773], [3775], [3879~3884], [3889~3890]
-→ 5개 disjoint interval, PageId 12개만 I/O
+→ 5개 disjoint interval, PageId 13개만 I/O
 ```
 
 ---
