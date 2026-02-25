@@ -51,15 +51,24 @@ DB 엔진 레벨에서 직접 공간 클러스터링 구현
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
 </div>
 
+> 측정 조건: JVM Warm-up 후 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화(flush + clearCache)
+
 | 건수 | Full Scan | GeoHash | Hilbert |
 |------|----------|---------|---------|
-| 10,000 | 100ms | 0ms | 29ms |
-| 79,081 | 434ms | 0ms | 33ms |
-| 500,000 | 768ms | 0ms | 24ms |
+| 10,000 | 100ms | 6.8ms | 29ms |
+| 20,000 | 133ms | 6.8ms | 33ms |
+| 30,000 | 259ms | 6.8ms | 32ms |
+| 50,000 | 292ms | 6.8ms | 33ms |
+| 79,081 | 434ms | 6.8ms | 33ms |
+| 100,000 | 528ms | 6.8ms | 47ms |
+| 200,000 | 660ms | 6.8ms | 24ms |
+| 500,000 | 768ms | 6.8ms | 24ms |
 | 1,000,000 | 1,177ms | 6ms | 34ms |
 
+> GeoHash avg: **6.8ms** (P95: 9.1ms) / Hilbert avg: **33ms** (P95: 41ms)
+
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
-- **GeoHash**: 공간 클러스터링으로 데이터 규모 무관 O(1)에 수렴, 최대 **251배** 향상
+- **GeoHash**: 반경 내 포함된 Page 수에 비례하는 O(P)로 동작, 전체 데이터 크기(N)가 아닌 공간 밀도에 의존 → 대규모 데이터에서도 일정한 검색 성능 유지
 - **Hilbert**: Multi-Interval Query로 필요한 PageId만 정확히 탐색
 
 ### 방식별 PageId 탐색 수 비교 (반경 5km, 강남 기준)
@@ -123,8 +132,10 @@ h값 분포: [3766], [3772~3773], [3775], [3879~3884], [3889~3890]
 → Base32 → long 변환 (공간 근접성 보존)
 → long % MAX_PAGES → PageId
 
-hashCode() 사용 시 공간 근접성 파괴
-Base32 → long 변환: 접두사가 같으면 long 값도 가까움 → 클러스터링 달성
+hashCode() 사용 시 값이 무작위 분산 → 공간 근접성 파괴
+Base32 값을 직접 hashCode()로 분산시키는 대신
+prefix 기반 modulo 매핑을 사용하여
+동일 격자(prefix 공유) 내 레코드가 동일 PageId로 할당되도록 설계
 ```
 
 ### Hilbert Multi-Interval Query
@@ -152,6 +163,66 @@ Multi-Interval:  5개 interval  → 13 PageId (정확히 필요한 것만)
 계산 비용(671만 연산)이 현재 구현의 한계이며, 실제 DB는 R-Tree로 이를 해결합니다.
 
 상세 구현 과정 → [HILBERT_IMPLEMENTATION.md](./mini-db/src/minidb/index/HILBERT_IMPLEMENTATION.md)
+
+---
+
+## Production Integration Strategy
+
+MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않기 때문에 Primary Database를 대체하는 용도가 아닌 **Read-Optimized Spatial Filter**로 사용합니다.
+
+```
+[MiniDB]  반경 내 HospitalCode 후보군 반환 (103건)
+               ↓
+[MariaDB] WHERE hospital_code IN (...)
+          LEFT JOIN hospital_detail ...
+```
+
+**이를 통해:**
+- Spatial Predicate를 Storage Layer에서 Pushdown
+- JOIN 이전 후보군 크기 감소 (79,081건 → 103건)
+- PK Lookup 기반 JOIN으로 전환 → 옵티마이저 Full Scan 포기 문제 해결
+- N+1 Query 완화 가능
+
+**운영 전략:**
+```
+병원 데이터는 주 1회 대량 배치 업데이트
+→ 매주 MiniDB 전체 재빌드 (delete 불필요)
+→ 재빌드 중 이전 파일로 서비스 유지
+→ 완료 후 파일 교체 (atomic rename)
+```
+
+**A/B 테스트 계획:**
+```
+동일 요청에 두 경로 병렬 실행 + 응답시간 로깅
+Full Scan 경로: MariaDB WHERE BETWEEN + JOIN
+MiniDB 경로:   MiniDB → hospital_code IN + JOIN
+→ 실측 데이터로 손익분기점 확인
+```
+
+---
+
+## Spatial Predicate Pushdown
+
+기존 Spatial Index는 Query Execution 단계에서 반경 필터링을 수행하기 때문에 JOIN 이전에 대량의 후보 레코드가 생성됩니다.
+
+MiniDB는 삽입 시점에서 공간 클러스터링을 적용하여 반경 필터링을 Storage Layer로 Pushdown함으로써 JOIN 이전 단계에서 후보군을 감소시킵니다.
+
+```
+기존 MariaDB Spatial Index:
+  Full Scan / Spatial Filter (79,081건 → 2,000건)
+  → JOIN 수행 (2,000 × detail)
+
+MiniDB:
+  Storage Filter → Candidate Set (103건)
+  → MariaDB WHERE hospital_code IN (103건)
+  → JOIN 수행 (103 × detail)
+```
+
+이를 통해:
+- Join Cardinality 감소 (2,000건 → 103건)
+- PK Lookup 기반 JOIN으로 전환
+- Nested Loop Join 비용 감소
+- N+1 발생 시 피해 최소화
 
 ---
 
