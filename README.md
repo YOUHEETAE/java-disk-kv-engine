@@ -50,7 +50,7 @@ DB 엔진 레벨에서 직접 공간 클러스터링 구현
 ## 목표
 
 ```
-Full Scan 125ms → 목표 10ms 이하
+Full Scan 1,257ms → 목표 10ms 이하
 Redis 없이 공간 클러스터링만으로 달성
 ```
 
@@ -76,10 +76,10 @@ Redis 없이 공간 클러스터링만으로 달성
 
 **공간 클러스터링**
 ```
-삽입 시: 좌표 → GeoHash → PageId 결정
+삽입 시: 좌표 → GeoHash/힐버트값 → PageId 결정
 → 가까운 병원이 자동으로 같은/인접 페이지에 저장
 
-검색 시: 반경 내 GeoHash 셀 → PageId 목록 → 해당 페이지만 읽기
+검색 시: 반경 내 PageId 목록 → 해당 페이지만 읽기
 → Full Scan 없이 필요한 페이지만 I/O
 ```
 
@@ -95,13 +95,20 @@ Redis 없이 공간 클러스터링만으로 달성
 ## 성능 결과
 
 <div align=center>
-<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width = "700"/>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
 </div>
 
+| 건수 | Full Scan | GeoHash | Hilbert |
+|------|----------|---------|---------|
+| 10,000 | 103ms | 0ms | 16ms |
+| 79,081 | 417ms | 0ms | 0ms |
+| 500,000 | 729ms | 5ms | 5ms |
+| 1,000,000 | 1,257ms | 5ms | 16ms |
 
-- Full Scan: 데이터량에 따라 응답 시간이 선형적으로 증가 (O(N))
-- GeoHash Index: 물리적 클러스터링을 통해 데이터 규모와 무관한 일정한 성능 유지 (O(1))에 수렴
-- 최대 성능 향상: 100만 건 기준 118.3배 빠른 응답 속도 확인
+- **Full Scan**: 데이터량에 따라 응답 시간 선형 증가 O(N)
+- **GeoHash**: 공간 클러스터링으로 데이터 규모와 무관한 일정 성능 O(1)에 수렴
+- **Hilbert**: GeoHash와 유사한 성능 달성
+- **최대 성능 향상**: 100만 건 기준 GeoHash 251배, Hilbert 78배
 
 ---
 
@@ -124,16 +131,33 @@ steps = ceil(radiusKm / 1.2) + 1
 radiusKm=5.0 → steps=6 → 13×13=169개 셀
 
 3×3 고정 시 → 반경 5km 커버 불가 (누락 발생)
-동적 확장 → 정확도 100% 달성
+동적 확장 → 정확도 100% 달성, 후보 수 1,379건
 ```
 
-### 힐버트 커브 인덱스 (예정)
+### 힐버트 커브 인덱스
 
 ```
-GeoHash 대비 공간 연속성 더 우수
-→ 힐버트 값이 가까우면 실제 거리도 가까움
-→ GeoHash와 동일한 SpatialIndex 인터페이스로 교체 가능
+좌표 → (x, y) 정수 격자 (32768×32768)
+→ 힐버트값 (long, 2^30 범위)
+→ / RANGE_PER_PAGE → PageId
 ```
+
+**% 대신 / RANGE_PER_PAGE**
+```
+% MAX_PAGE      → 힐버트값을 10,000으로 접어버림 → 연속성 파괴 → Full Scan 退化
+/ RANGE_PER_PAGE → 선형 분할 → 연속성 보존 → PageId 범위 검색 가능
+```
+
+**힐버트 경계 점프 문제**
+```
+힐버트 커브는 사분면 경계에서 힐버트값이 크게 점프
+강남 기준 실측: 남쪽 5km 이동 시 최대 12,490,934 차이
+→ delta = steps * steps * 200 으로 보정 → 후보 수 2,102건
+
+TODO: 좌표마다 경계 위치가 달라 동적 delta 계산 필요
+```
+
+구현 상세 → [HILBERT_IMPLEMENTATION.md](./mini-db/src/minidb/index/HILBERT_IMPLEMENTATION.md)
 
 ---
 
@@ -142,23 +166,27 @@ GeoHash 대비 공간 연속성 더 우수
 ```
 minidb/
   storage/
-    Page.java           4KB 페이지
-    DiskManager.java    디스크 I/O
-    PageLayout.java     슬롯 페이지 구조
+    Page.java               4KB 페이지
+    DiskManager.java        디스크 I/O
+    PageLayout.java         슬롯 페이지 구조
   buffer/
-    CacheManager.java   Write-Back 캐싱
+    CacheManager.java       Write-Back 캐싱
   api/
     RecordManager.java          Key-Value 저장
     SpatialRecordManager.java   공간 인덱스 저장/검색
   index/
-    SpatialIndex.java   인터페이스
-    GeoHash.java        순수 계산 로직
-    GeoHashIndex.java   SpatialIndex 구현체
+    SpatialIndex.java       인터페이스
+    GeoHash.java            순수 계산 로직
+    GeoHashIndex.java       SpatialIndex 구현체
+    HilbertCurve.java       순수 계산 로직
+    HilbertIndex.java       SpatialIndex 구현체
   benchmark/
-    FullScanBenchmark.java    Full Scan 측정
-    GeoHashBenchmark.java     GeoHash 측정
+    FullScanBenchmark.java      Full Scan 측정
+    GeoHashBenchmark.java       GeoHash 측정
+    HilbertBenchmark.java       Hilbert 측정
+    BenchmarkRunner.java        3방향 비교 실행
   util/
-    GeoUtils.java       Haversine 거리 계산
+    GeoUtils.java           Haversine 거리 계산
 ```
 
 ---
@@ -206,9 +234,10 @@ cacheManager.close();
 ✅ Phase 2: API (RecordManager, PageLayout)
 ✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
 ✅ Phase 4: Benchmark (Full Scan vs GeoHash)
-⬜ Phase 5: 힐버트 커브 구현
-⬜ Phase 6: 최종 3방향 비교
-⬜ Phase 7: 교차 계산 알고리즘 (후보 수 최적화)
+✅ Phase 5: 힐버트 커브 구현 (HilbertCurve, HilbertIndex)
+✅ Phase 6: 최종 3방향 비교 (Full Scan vs GeoHash vs Hilbert)
+⬜ Phase 7: 힐버트 동적 delta 계산
+⬜ Phase 8: 교차 계산 알고리즘 (후보 수 최적화)
 ```
 
 ---
