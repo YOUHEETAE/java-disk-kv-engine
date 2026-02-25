@@ -229,8 +229,14 @@ minidb/
 ✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
 ✅ Phase 4: Benchmark (Full Scan vs GeoHash)
 ✅ Phase 5: Hilbert (HilbertCurve, HilbertIndex, Multi-Interval Query)
-✅ Phase 6: 최종 3방향 비교
-⬜ Phase 7: 격자 순회 없는 Interval 직접 계산 (Hilbert R-Tree 방향)
+✅ Phase 6: 3방향 벤치마크 + Page Seek Count 비교
+⬜ Phase 7: 실제 프로젝트 연동
+    7-1. hospital_code만 저장하도록 변경
+    7-2. MiniDB JAR 빌드
+    7-3. Spring 프로젝트 의존성 추가
+    7-4. 배치 재빌드 스케줄러 (주 1회)
+    7-5. A/B 테스트 로깅 (MiniDB vs Full Scan)
+    7-6. 실측 비교 문서화
 ```
 
 ---
