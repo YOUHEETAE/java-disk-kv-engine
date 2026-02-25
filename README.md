@@ -1,6 +1,6 @@
 # MiniDB - GeoSpatial Index Engine
 
-위치 기반 병원 검색 시스템의 공간 인덱스 성능 문제를 해결하기 위해 만든 경량 공간 인덱스 엔진
+> 실제 병원 검색 서비스의 성능 한계에서 출발해 직접 구현한 경량 공간 인덱스 엔진
 
 ---
 
@@ -19,8 +19,7 @@ SPATIAL INDEX (MBRContains) 도입
 → 옵티마이저가 Full Scan 선택
 → FORCE INDEX 강제해도 23배 비효율 (23,000 스캔 / 1,000 반환)
 
-결론: 7만 건 규모에서 Full Scan + BETWEEN이 최적
-→ 평균 응답 시간 30-50ms
+결론: 7만 건 규모에서 Full Scan + BETWEEN이 최적 (30-50ms)
 ```
 
 ### 문제 2: Redis Geohash 캐싱의 한계
@@ -31,7 +30,6 @@ Geohash 격자 캐싱 도입 → 캐시 HIT 29-124ms
 
 하지만:
 → Redis 외부 인프라 의존
-→ 네트워크 레이턴시 포함
 → Cold Start 문제 (첫 요청 671ms)
 → 서버별 캐시 독립 (공유 불가)
 ```
@@ -47,51 +45,6 @@ DB 엔진 레벨에서 직접 공간 클러스터링 구현
 
 ---
 
-## 목표
-
-```
-Full Scan 1,257ms → 목표 10ms 이하
-Redis 없이 공간 클러스터링만으로 달성
-```
-
----
-
-## 아키텍처
-
-```
-┌─────────────────────────────────┐
-│  API Layer (RecordManager)       │  Key-Value 인터페이스
-│  API Layer (SpatialRecordManager)│  공간 인덱스 인터페이스
-├─────────────────────────────────┤
-│  Index Layer (SpatialIndex)      │  GeoHash / 힐버트 커브
-├─────────────────────────────────┤
-│  Buffer Layer (CacheManager)     │  Write-Back 캐싱
-├─────────────────────────────────┤
-│  Storage Layer (DiskManager)     │  페이지 기반 디스크 I/O
-│  Storage Layer (PageLayout)      │  슬롯 페이지 구조
-└─────────────────────────────────┘
-```
-
-### 핵심 설계
-
-**공간 클러스터링**
-```
-삽입 시: 좌표 → GeoHash/힐버트값 → PageId 결정
-→ 가까운 병원이 자동으로 같은/인접 페이지에 저장
-
-검색 시: 반경 내 PageId 목록 → 해당 페이지만 읽기
-→ Full Scan 없이 필요한 페이지만 I/O
-```
-
-**원형 필터링 외부 위임**
-```
-이 엔진: 사각형(MBR) 기준 페이지 목록 반환
-애플리케이션: Haversine 공식으로 원형 필터링
-→ 엔진은 I/O 최소화에만 집중
-```
-
----
-
 ## 성능 결과
 
 <div align=center>
@@ -100,19 +53,59 @@ Redis 없이 공간 클러스터링만으로 달성
 
 | 건수 | Full Scan | GeoHash | Hilbert |
 |------|----------|---------|---------|
-| 10,000 | 103ms | 0ms | 16ms |
-| 79,081 | 417ms | 0ms | 0ms |
-| 500,000 | 729ms | 5ms | 5ms |
-| 1,000,000 | 1,257ms | 5ms | 16ms |
+| 10,000 | 100ms | 0ms | 29ms |
+| 79,081 | 434ms | 0ms | 33ms |
+| 500,000 | 768ms | 0ms | 24ms |
+| 1,000,000 | 1,177ms | 6ms | 34ms |
 
-- **Full Scan**: 데이터량에 따라 응답 시간 선형 증가 O(N)
-- **GeoHash**: 공간 클러스터링으로 데이터 규모와 무관한 일정 성능 O(1)에 수렴
-- **Hilbert**: GeoHash와 유사한 성능 달성
-- **최대 성능 향상**: 100만 건 기준 GeoHash 251배, Hilbert 78배
+- **Full Scan**: 데이터량에 따라 선형 증가 O(N)
+- **GeoHash**: 공간 클러스터링으로 데이터 규모 무관 O(1)에 수렴, 최대 **251배** 향상
+- **Hilbert**: Multi-Interval Query로 필요한 PageId만 정확히 탐색
+
+### 방식별 PageId 탐색 수 비교 (반경 5km, 강남 기준)
+
+| 방식 | PageId 수 | interval 수 | 후보 수 |
+|------|----------|------------|--------|
+| **Full Scan** | 10,000 | 1 | 79,081건 |
+| **선형 범위** | 275 | 1 | 2,102건 |
+| **GeoHash** | 169 | 분산 | 1,379건 |
+| **Hilbert Multi-Interval** | **12** | **5** | **97건** |
+
+Hilbert Multi-Interval이 PageId 12개만 읽으면 되는 이유:
+원형 영역이 힐버트 곡선 위에서 5개의 disjoint interval로 정확히 표현되기 때문입니다.
+
+```
+h값 분포: [3766], [3772~3773], [3775], [3879~3884], [3889~3890]
+→ 실제 필요한 PageId 12개만 I/O
+```
 
 ---
 
-## 구현 방식
+## 핵심 설계
+
+### 아키텍처
+
+```
+┌─────────────────────────────────┐
+│  API Layer (SpatialRecordManager)│  공간 인덱스 저장/검색
+├─────────────────────────────────┤
+│  Index Layer (SpatialIndex)      │  GeoHash / Hilbert
+├─────────────────────────────────┤
+│  Buffer Layer (CacheManager)     │  Write-Back 캐싱
+├─────────────────────────────────┤
+│  Storage Layer (DiskManager)     │  페이지 기반 디스크 I/O
+└─────────────────────────────────┘
+```
+
+### 공간 클러스터링
+
+```
+삽입 시: 좌표 → GeoHash/힐버트값 → PageId 결정
+→ 가까운 병원이 자동으로 같은/인접 페이지에 저장
+
+검색 시: 반경 내 PageId 목록 → 해당 페이지만 읽기
+→ Full Scan 없이 필요한 페이지만 I/O
+```
 
 ### GeoHash 인덱스
 
@@ -122,42 +115,58 @@ Redis 없이 공간 클러스터링만으로 달성
 → long % MAX_PAGES → PageId
 
 hashCode() 사용 시 공간 근접성 파괴
-Base32 → long 변환으로 접두사가 같으면 long 값도 가까움
+Base32 → long 변환: 접두사가 같으면 long 값도 가까움 → 클러스터링 달성
 ```
 
-**동적 셀 범위**
-```
-steps = ceil(radiusKm / 1.2) + 1
-radiusKm=5.0 → steps=6 → 13×13=169개 셀
-
-3×3 고정 시 → 반경 5km 커버 불가 (누락 발생)
-동적 확장 → 정확도 100% 달성, 후보 수 1,379건
-```
-
-### 힐버트 커브 인덱스
+### Hilbert Multi-Interval Query
 
 ```
-좌표 → (x, y) 정수 격자 (32768×32768)
-→ 힐버트값 (long, 2^30 범위)
-→ / RANGE_PER_PAGE → PageId
+① 반경 안 격자(x, y) 순회
+② 각 격자 → 힐버트값 → PageId 마킹
+③ PageId 연속 구간 → Interval Merge
+④ disjoint interval별 PageId 범위만 읽기
 ```
 
-**% 대신 / RANGE_PER_PAGE**
+**왜 Multi-Interval인가?**
+
+원형 영역은 힐버트 곡선 위에서 하나의 연속 구간이 아닙니다.
+
 ```
-% MAX_PAGE      → 힐버트값을 10,000으로 접어버림 → 연속성 파괴 → Full Scan 退化
-/ RANGE_PER_PAGE → 선형 분할 → 연속성 보존 → PageId 범위 검색 가능
+힐버트 경계 점프: 사분면 경계에서 힐버트값이 크게 점프
+→ 원형이 곡선 위에서 여러 disjoint interval로 쪼개짐
+
+선형 범위 방식: centerH ± delta → 1개 구간 275 PageId (엉뚱한 지역 포함)
+Multi-Interval:  5개 interval  → 12 PageId (정확히 필요한 것만)
 ```
 
-**힐버트 경계 점프 문제**
-```
-힐버트 커브는 사분면 경계에서 힐버트값이 크게 점프
-강남 기준 실측: 남쪽 5km 이동 시 최대 12,490,934 차이
-→ delta = steps * steps * 200 으로 보정 → 후보 수 2,102건
+이것이 실제 Hilbert R-Tree가 사용하는 방식입니다.
+계산 비용(671만 연산)이 현재 구현의 한계이며, 실제 DB는 R-Tree로 이를 해결합니다.
 
-TODO: 좌표마다 경계 위치가 달라 동적 delta 계산 필요
-```
+상세 구현 과정 → [HILBERT_IMPLEMENTATION.md](./mini-db/src/minidb/index/HILBERT_IMPLEMENTATION.md)
 
-구현 상세 → [HILBERT_IMPLEMENTATION.md](./mini-db/src/minidb/index/HILBERT_IMPLEMENTATION.md)
+---
+
+## 사용법
+
+```java
+DiskManager diskManager = new DiskManager("data.db");
+CacheManager cacheManager = new CacheManager(diskManager);
+SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
+
+// 삽입
+manager.put(37.4979, 127.0276, hospital.toBytes());
+
+// 반경 검색
+List<byte[]> candidates = manager.searchRadius(37.4979, 127.0276, 5.0);
+
+// 원형 필터링은 애플리케이션에서
+candidates.stream()
+    .map(b -> Hospital.fromBytes("", b))
+    .filter(h -> GeoUtils.haversine(lat, lng, h.coordinateY, h.coordinateX) <= 5.0)
+    .collect(Collectors.toList());
+
+cacheManager.close();
+```
 
 ---
 
@@ -179,7 +188,7 @@ minidb/
     GeoHash.java            순수 계산 로직
     GeoHashIndex.java       SpatialIndex 구현체
     HilbertCurve.java       순수 계산 로직
-    HilbertIndex.java       SpatialIndex 구현체
+    HilbertIndex.java       SpatialIndex 구현체 (Multi-Interval)
   benchmark/
     FullScanBenchmark.java      Full Scan 측정
     GeoHashBenchmark.java       GeoHash 측정
@@ -187,30 +196,6 @@ minidb/
     BenchmarkRunner.java        3방향 비교 실행
   util/
     GeoUtils.java           Haversine 거리 계산
-```
-
----
-
-## 사용법
-
-```java
-DiskManager diskManager = new DiskManager("data.db");
-CacheManager cacheManager = new CacheManager(diskManager);
-SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
-
-// 삽입
-manager.put(37.4979, 127.0276, hospital.toBytes());
-
-// 반경 검색 (사각형 MBR)
-List<byte[]> candidates = manager.searchRadius(37.4979, 127.0276, 5.0);
-
-// 원형 필터링은 애플리케이션에서
-candidates.stream()
-    .map(b -> Hospital.fromBytes("", b))
-    .filter(h -> GeoUtils.haversine(lat, lng, h.coordinateY, h.coordinateX) <= 5.0)
-    .collect(Collectors.toList());
-
-cacheManager.close();
 ```
 
 ---
@@ -234,14 +219,13 @@ cacheManager.close();
 ✅ Phase 2: API (RecordManager, PageLayout)
 ✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
 ✅ Phase 4: Benchmark (Full Scan vs GeoHash)
-✅ Phase 5: 힐버트 커브 구현 (HilbertCurve, HilbertIndex)
-✅ Phase 6: 최종 3방향 비교 (Full Scan vs GeoHash vs Hilbert)
-⬜ Phase 7: 힐버트 동적 delta 계산
-⬜ Phase 8: 교차 계산 알고리즘 (후보 수 최적화)
+✅ Phase 5: Hilbert (HilbertCurve, HilbertIndex, Multi-Interval Query)
+✅ Phase 6: 최종 3방향 비교
+⬜ Phase 7: 격자 순회 없는 Interval 직접 계산 (Hilbert R-Tree 방향)
 ```
 
 ---
 
 ## 라이센스
 
-MIT - 학습 목적
+MIT

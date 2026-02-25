@@ -1,291 +1,138 @@
-# 힐버트 커브 인덱스 구현 - 문제 해결 과정
+# Index 모듈
 
-> **% MAX_PAGE 방식의 한계 발견, / RANGE_PER_PAGE 전환, 격자 순회 트레이드오프 분석**
-
----
-
-## 목차
-
-1. [배경](#-배경)
-2. [1차 시도: % MAX_PAGE](#-1차-시도--maxpage)
-3. [원인 분석: 힐버트 경계 점프](#-원인-분석-힐버트-경계-점프)
-4. [2차 시도: / RANGE_PER_PAGE](#-2차-시도--rangeperpag)
-5. [delta 실측 및 보정](#-delta-실측-및-보정)
-6. [3차 시도: 격자 순회 방식](#-3차-시도-격자-순회-방식)
-7. [격자 순회의 한계: 연산 병목](#-격자-순회의-한계-연산-병목)
-8. [최종 결정: 선형 범위 방식 유지](#-최종-결정-선형-범위-방식-유지)
-9. [최종 결과](#-최종-결과)
-10. [남은 과제](#-남은-과제)
+공간 인덱스 구현 - GeoHash / Hilbert Multi-Interval Query
 
 ---
 
-## 🎯 배경
-
-GeoHash와 동일한 `SpatialIndex` 인터페이스로 힐버트 커브를 구현했습니다.
+## 인터페이스
 
 ```java
 public interface SpatialIndex {
-    int toPageId(double lat, double lng);
-    List<Integer> getPageIds(double lat, double lng, double radiusKm);
+    int toPageId(double lat, double lng);       // 삽입 시
+    List<Integer> getPageIds(double lat, double lng, double radiusKm); // 검색 시
 }
 ```
 
-GeoHash는 `neighbor()` 로 인접 셀을 직접 지정하는 방식입니다.
-힐버트는 값이 연속적이라 `min ~ max` 범위로 PageId를 구할 수 있다고 판단했습니다.
-
 ---
 
-## ❌ 1차 시도: % MAX_PAGE
+## GeoHash
 
-### 구현
+### GeoHash.java
 
-```java
-public int toPageId(double lat, double lng) {
-    long h = HilbertCurve.encode(lat, lng);
-    return (int)(h % MAX_PAGE);
-}
+| 메서드 | 역할 |
+|--------|------|
+| `toGeohash(lat, lng, precision)` | 좌표 → Geohash 문자열 |
+| `toLong(geohash)` | Geohash → long (Base32 변환, 공간 근접성 보존) |
+| `neighbor(morton, dLat, dLng)` | 인접 셀 계산 |
+| `getNeighbors(morton)` | 8방향 + 중심 셀 목록 반환 |
 
-public List<Integer> getPageIds(...) {
-    long delta = steps * steps;  // 268 * 268 = 71,824
-    // centerH ± delta 범위의 % MAX_PAGE PageId 수집
-}
-```
-
-### 결과
+**핵심: hashCode() 대신 Base32 → long 변환**
 
 ```
-후보 수: 79,081건  ← Full Scan과 동일
-결과:    0건
+hashCode(): "wydm9xq" → 18374621, "wydm9xr" → -92837462  ← 공간 근접성 파괴
+Base32→long: 접두사가 같으면 long 값도 가까움  ← 공간 근접성 보존
 ```
 
-### 원인
+### GeoHashIndex.java
 
 ```
-delta = 71,824 > MAX_PAGE(10,000)
-→ 71,824 % 10,000 → 0 ~ 9,999 전부 커버
-→ 모든 PageId 조회 → Full Scan 退化
+PRECISION = 6  → 격자 1.2km
+steps = ceil(radiusKm / 1.2) + 1 = 6
+→ 13×13 = 169개 셀, 후보 1,379건
 ```
 
 ---
 
-## 🔍 원인 분석: 힐버트 경계 점프
+## Hilbert
 
-### 강남 좌표 기준 8방향 실측
+### HilbertCurve.java
 
-```
-중심:     (37.4979, 127.0276) → 힐버트값 416,884,576
-
-북쪽 5km: 차이       63,621  ← 같은 사분면, 작음
-남쪽 5km: 차이   11,704,774  ← 사분면 경계 통과, 거대 점프
-서쪽 5km: 차이      263,494
-동쪽 5km: 차이      786,170
-대각 최대: 차이   12,490,934
-```
-
-### 왜 경계 점프가 발생하나?
-
-힐버트 커브는 재귀적으로 사분면을 회전/반전해서 붙입니다.
-큰 사분면 경계를 넘을 때 힐버트값이 크게 점프합니다.
+| 메서드 | 역할 |
+|--------|------|
+| `encode(lat, lng)` | 좌표 → 힐버트값 |
+| `encodeGrid(x, y)` | 격자 좌표 → 힐버트값 (getPageIds 내부용) |
+| `toGridX(lng)` | 경도 → 격자 x |
+| `toGridY(lat)` | 위도 → 격자 y |
 
 ```
-북쪽 이동: 같은 사분면 내부 → 힐버트값 연속
-남쪽 이동: 사분면 경계 통과 → 힐버트값 대폭 점프
+ORDER = 15 → 32768×32768 격자
+힐버트값 범위: 2^30 ≈ 10억
 ```
 
-GeoHash도 동일한 문제가 있지만 `neighbor()` 로 셀을 직접 지정해서 영향이 없습니다.
+### HilbertIndex.java - Multi-Interval Query
 
----
-
-## ✅ 2차 시도: / RANGE_PER_PAGE
-
-### 핵심 아이디어
-
+**toPageId (삽입):**
 ```
-% MAX_PAGE      → 힐버트값을 10,000으로 접어버림 → 연속성 파괴
-/ RANGE_PER_PAGE → 힐버트값을 10,000 구간으로 선형 분할 → 연속성 보존
+힐버트값 / RANGE_PER_PAGE → PageId
+
+% MAX_PAGE      → 힐버트 연속성 파괴 → Full Scan 退化
+/ RANGE_PER_PAGE → 선형 분할 → 연속성 보존
 ```
 
-### % vs / 비교
-
+**getPageIds (검색):**
 ```
-중심:     힐버트값 416,884,576
-남쪽 5km: 힐버트값 405,179,802
+① 반경 안 격자(x,y) 순회
+② encodeGrid(x, y) → 힐버트값 → PageId 마킹
+③ visited[10000] 배열 순회 → Interval Merge
+④ disjoint interval → PageId 목록
+```
 
-% 방식:  416,884,576 % 10,000 = 6,576
-         405,179,802 % 10,000 = 9,802  → PageId 차이 3,226
+**왜 Multi-Interval인가?**
+```
+원형 영역은 힐버트 곡선 위에서 여러 disjoint interval로 나뉨
 
-/ 방식:  416,884,576 / 107,374 = 3,882
-         405,179,802 / 107,374 = 3,773  → PageId 차이 109
+강남 반경 5km 실측:
+  [3766], [3772~3773], [3775], [3879~3884], [3889~3890]
+  → 5개 interval, PageId 12개
+
+선형 범위: PageId 275개 (엉뚱한 지역 포함)
+GeoHash:   PageId 169개
+Hilbert:   PageId  12개 ← 힐버트의 진짜 강점
 ```
 
 ---
 
-## 📐 delta 실측 및 보정
+## 방식별 비교
 
-### delta 보정 과정
-
-| delta | 후보 수 | 결과 | 비고 |
-|-------|--------|------|------|
-| `steps * 2` | 8,393건 | 0건 | 부족 |
-| `steps * steps * 2` | 22건 | 19건 | 8건 누락 |
-| `steps * steps * 200` | 2,102건 | 27건 ✅ | 실측 최대값 커버 |
-
-```
-실측 최대 delta:     12,490,934
-steps*steps*200:     14,364,800  ← 커버
-```
-
----
-
-## 🔬 3차 시도: 격자 순회 방식
-
-### 아이디어
-
-선형 범위 방식의 후보 수(2,102건)가 GeoHash(1,379건)보다 많은 문제를 해결하기 위해
-격자 좌표를 직접 순회하는 방식을 시도했습니다.
-
-```
-현재: centerH ± delta → PageId 선형 범위
-개선: (cx, cy) 격자 순회 → 각 격자 힐버트값 → PageId
-```
-
-### 구현
-
-위도/경도 격자 크기가 다르다는 점을 발견했습니다.
-
-```
-위도 1격자: 0.0185km  (5.5도 × 110km / 32768)
-경도 1격자: 0.0095km  (3.5도 × 88.9km / 32768)
-```
-
-행마다 dx 범위를 동적으로 계산해서 원형에 가깝게 순회했습니다.
-
-```java
-for (long dy = -stepsY; dy <= stepsY; dy++) {
-    double distY = dy * KM_PER_GRID_LAT;
-    double remainKm = Math.sqrt(radiusKm² - distY²);
-    long maxDx = ceil(remainKm / KM_PER_GRID_LNG);
-    for (long dx = -maxDx; dx <= maxDx; dx++) {
-        // 각 격자 → 힐버트값 → PageId
-    }
-}
-```
-
-### 결과
-
-```
-후보 수: 94건   ← GeoHash 1,379건 대비 14배 적음 ✅
-결과:    27건   ✅
-검색:    37ms   ← GeoHash 0~16ms 대비 느림 ❌
-```
-
----
-
-## ⚠️ 격자 순회의 한계: 연산 병목
-
-### 루프 횟수 비교
-
-```
-GeoHash neighbor():  169번 연산
-힐버트 격자 순회:    447,975번 × xy2d 15번 = 6,719,625번 연산
-                     → GeoHash 대비 39,760배
-```
-
-### 왜 GeoHash는 적은가?
-
-```
-GeoHash: neighbor()로 인접 셀 직접 지정
-         → 13×13 = 169번만 계산
-
-힐버트: 반경 안 모든 격자를 순회해야 함
-        → GeoHash처럼 "인접 셀 직접 지정" 불가
-        → 격자 순회가 구조적 한계
-```
-
-### 트레이드오프 정리
-
-| 항목 | 선형 범위 | 격자 순회 |
+| 항목 | GeoHash | Hilbert |
 |------|---------|---------|
-| **검색 시간** | 0~16ms ✅ | 37ms ❌ |
-| **후보 수** | 2,102건 ❌ | 94건 ✅ |
-| **연산 횟수** | 268번 ✅ | 6,719,625번 ❌ |
-| **delta 하드코딩** | 필요 ❌ | 불필요 ✅ |
+| **PageId 수** | 169개 | 12개 |
+| **후보 수** | 1,379건 | 103건 |
+| **검색 시간** | 0~16ms | 37ms |
+| **getPageIds 연산** | 169번 | 671만 번 |
+| **interval 수** | 분산 | 5개 |
 
----
-
-## ✅ 최종 결정: 선형 범위 방식 유지
-
-### 이유
-
-현재 규모(79,081건, SSD 기반)에서는 **연산 비용 > I/O 절감 효과**입니다.
-
+**트레이드오프:**
 ```
-격자 순회로 후보 수 94건 달성해도
-6,719,625번 연산 비용이 더 큼
-→ 선형 범위(0~16ms) vs 격자 순회(37ms)
-```
+GeoHash:  연산 적음 → 빠름, PageId 많음
+Hilbert:  연산 많음 → 느림, PageId 적음 (I/O 최소)
 
-### 격자 순회가 유리한 환경
-
-```
-대용량 데이터 (수천만 건 이상)
-  → I/O 비용이 연산 비용보다 커질 때
-
-HDD 환경
-  → Sequential I/O 이점이 극대화될 때
-  → 힐버트 후보 94건 × 순차 I/O << GeoHash 1,379건 × 랜덤 I/O
+HDD 대용량 환경: Hilbert 유리 (PageId 12개 × 순차 I/O)
+SSD 소규모 환경: GeoHash 유리 (연산 비용 < I/O 절감)
 ```
 
 ---
 
-## 📊 최종 결과
-
-### HilbertBenchmark (79,081건, 선형 범위)
+## 파일 구조
 
 ```
-삽입:    168ms
-후보 수: 2,102건
-검색:    0~16ms
-결과:    27건 ✅
-```
-
-### 3방향 벤치마크 비교
-
-| 건수 | Full Scan | GeoHash | Hilbert |
-|------|----------|---------|---------|
-| 10,000 | 103ms | 0ms | 16ms |
-| 79,081 | 417ms | 0ms | 0ms |
-| 500,000 | 729ms | 5ms | 5ms |
-| 1,000,000 | 1,257ms | 5ms | 16ms |
-
----
-
-## 🔮 남은 과제
-
-### 동적 delta
-
-```java
-// TODO: 좌표마다 힐버트 경계 위치가 다름
-// 현재는 강남 기준 실측값 하드코딩
-// 동적 계산 방향:
-//   중심 → 8방향 경계 좌표 힐버트값 실측 → max delta 사용
-long delta = steps * steps * 200;
-```
-
-### 격자 순회 최적화 (대용량 환경 대비)
-
-```
-xy2d() 연산 캐싱
-→ 동일 격자 반복 계산 제거
-
-비트 병렬 처리
-→ SIMD 활용으로 연산 속도 향상
+index/
+  SpatialIndex.java      인터페이스
+  GeoHash.java           순수 계산 로직
+  GeoHashIndex.java      SpatialIndex 구현체
+  HilbertCurve.java      순수 계산 로직
+  HilbertIndex.java      SpatialIndex 구현체 (Multi-Interval)
+  HILBERT_IMPLEMENTATION.md  구현 과정 상세 기록
 ```
 
 ---
 
-## 📚 참고
+## 의존 관계
 
-- [GeoHash 구현](../index/README.md)
-- [벤치마크 결과](../benchmark/README.md)
-- [힐버트 커브 시각화](../../docs/hilbert_visual.html)
+```
+GeoHashIndex  → GeoHash
+HilbertIndex  → HilbertCurve
+GeoHashIndex  implements SpatialIndex
+HilbertIndex  implements SpatialIndex
+SpatialRecordManager → SpatialIndex (주입)
+```

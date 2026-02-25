@@ -1,18 +1,6 @@
 # Benchmark 모듈
 
-공간 인덱스 성능 측정 - Full Scan vs GeoHash vs 힐버트 커브 비교
-
----
-
-## 목표
-
-병원 위치 데이터 반경 5km 검색 성능을 3가지 방식으로 비교
-
-```
-Full Scan        → 기준선
-GeoHash          → 공간 인덱스 (격자 기반)
-힐버트 커브      → 공간 인덱스 (곡선 기반)
-```
+공간 인덱스 성능 측정 - Full Scan vs GeoHash vs Hilbert 3방향 비교
 
 ---
 
@@ -26,147 +14,94 @@ GeoHash          → 공간 인덱스 (격자 기반)
 | **페이지 크기** | 4KB |
 | **캐시 전략** | Write-Back (검색 전 캐시 초기화) |
 | **랜덤 시드** | 42 (동일한 더미 데이터 보장) |
+| **필터링** | 사각형 MBR (원형 필터링은 프론트엔드 위임) |
 
 ---
 
-## 더미 데이터 구조
+## 최종 벤치마크 결과
 
-실제 `hospital_main` 테이블 구조 기반
-
-| 필드 | 타입 | 비고 |
-|------|------|------|
-| hospital_code | String | H00001 ~ H79081 |
-| coordinate_x | double | 경도 (126.0 ~ 129.5) |
-| coordinate_y | double | 위도 (33.0 ~ 38.5) |
-| doctor_num | String | 랜덤 |
-| hospital_address | String | 랜덤 |
-| hospital_name | String | 랜덤 |
-| hospital_tel | String | 랜덤 |
-| district_name | String | 랜덤 |
-| hospital_homepage | String | 랜덤 |
-| province_name | String | 랜덤 |
-
-**직렬화 방식:** 바이너리 (ByteBuffer)
+| 건수 | Full Scan | GeoHash | Hilbert |
+|------|----------|---------|---------|
+| 10,000 | 100ms | 0ms | 29ms |
+| 20,000 | 133ms | 0ms | 33ms |
+| 30,000 | 259ms | 2ms | 32ms |
+| 50,000 | 292ms | 0ms | 33ms |
+| 79,081 | 434ms | 0ms | 33ms |
+| 100,000 | 528ms | 0ms | 47ms |
+| 200,000 | 660ms | 3ms | 24ms |
+| 500,000 | 768ms | 0ms | 24ms |
+| 1,000,000 | 1,177ms | 6ms | 34ms |
 
 ---
 
-## 성능 측정 결과
+## PageId 탐색 수 비교 (반경 5km, 강남 기준)
 
-### 최종 3방향 비교
-
-| 건수 | Full Scan | GeoHash | Hilbert | GeoHash 개선율 | Hilbert 개선율 |
-|------|----------|---------|---------|--------------|--------------|
-| 10,000 | 103ms | 0ms | 16ms | - | 6배 |
-| 20,000 | 164ms | 3ms | 0ms | 54배 | - |
-| 30,000 | 199ms | 0ms | 0ms | - | - |
-| 50,000 | 290ms | 0ms | 16ms | - | 18배 |
-| 79,081 | 417ms | 0ms | 0ms | - | - |
-| 100,000 | 487ms | 1ms | 0ms | 487배 | - |
-| 200,000 | 534ms | 0ms | 4ms | - | 133배 |
-| 500,000 | 729ms | 5ms | 5ms | 145배 | 145배 |
-| 1,000,000 | 1,257ms | 5ms | 16ms | **251배** | **78배** |
-
-### 후보 수 비교 (79,081건 기준)
-
-| 방식 | PageId 조회 수 | 후보 수 | 결과 |
-|------|-------------|--------|------|
-| Full Scan | 전체 | 79,081건 | 27건 |
-| GeoHash | 169개 (13×13 셀) | 1,379건 | 27건 ✅ |
-| Hilbert | 268개 (선형 범위) | 2,102건 | 27건 ✅ |
+| 방식 | PageId 수 | interval 수 | 후보 수 |
+|------|----------|------------|--------|
+| Full Scan | 10,000 | 1 | 79,081건 |
+| 선형 범위 | 275 | 1 | 2,102건 |
+| GeoHash | 169 | 분산 | 1,379건 |
+| **Hilbert Multi-Interval** | **12** | **5** | **103건** |
 
 ---
 
 ## GeoHash 설계 개선 과정
 
-### 1차 시도: 3×3 고정 셀
+### 1차: 3×3 고정 셀
 
 ```
-중심 셀 + 주변 8개 = 9개 셀
-커버 범위: 3.6km × 3.6km
+후보 70건, 결과 4건 (27건 중 23건 누락)
+→ 반경 5km를 3.6km로 커버 불가
 ```
 
-**결과:**
-```
-후보: 70건
-결과: 4건 (27건 중 23건 누락)
-```
-
-**문제:** 반경 5km를 3×3 셀(3.6km)로 커버 불가
-
-### 2차 시도: 동적 셀 범위 확장
+### 2차: 동적 셀 범위 (현재)
 
 ```
-steps = ceil(radiusKm / CELL_SIZE_KM) + 1
-      = ceil(5.0 / 1.2) + 1 = 6
-
-범위: -6 ~ +6 = 13×13 = 169개 셀
-커버: 15.6km × 15.6km
-```
-
-**결과:**
-```
-후보: 1,379건
-결과: 27건 ✅ (Full Scan과 일치)
+steps = ceil(5.0 / 1.2) + 1 = 6 → 13×13 = 169개 셀
+후보 1,379건, 결과 27건 ✅
 ```
 
 ---
 
-## 힐버트 설계 개선 과정
+## Hilbert 설계 개선 과정
 
-### 1차 시도: % MAX_PAGE
-
-```
-힐버트값 % 10,000 → PageId
-delta = steps * steps = 71,824
-```
-
-**결과:**
-```
-후보: 79,081건 (Full Scan 退化)
-결과: 0건
-```
-
-**문제:** delta가 MAX_PAGE를 초과 → 전체 PageId 커버
-
-### 2차 시도: / RANGE_PER_PAGE + delta 보정
+### 1차: % MAX_PAGE
 
 ```
-힐버트값 / RANGE_PER_PAGE → PageId  (선형 분할로 연속성 보존)
-delta = steps * steps * 2
+delta > MAX_PAGE → 전체 PageId 커버 → Full Scan 退化
+후보 79,081건, 결과 0건
 ```
 
-**결과:**
-```
-후보: 22건
-결과: 19건 (8건 누락)
-```
-
-**문제:** 힐버트 경계 점프(최대 12,490,934)를 delta가 커버 못함
-
-### 3차 시도: delta 실측 기반 보정
+### 2차: / RANGE_PER_PAGE + delta 하드코딩
 
 ```
-강남 기준 8방향 실측 → 최대 delta: 12,490,934
-steps * steps * 200 = 14,364,800  ← 커버
+delta = steps * steps * 200
+PageId 275개, interval 1개, 후보 2,102건 ✅
+→ 엉뚱한 지역 포함, delta 하드코딩 한계
 ```
 
-**결과:**
-```
-후보: 2,102건
-결과: 27건 ✅ (Full Scan과 일치)
-```
-
-구현 상세 → [HILBERT_IMPLEMENTATION.md](../index/HILBERT_IMPLEMENTATION.md)
-
----
-
-## 캐시 효과 제거
+### 3차: 격자 순회
 
 ```
-캐시 초기화 전: 메모리에서 읽음 → 왜곡된 수치
-캐시 초기화 후: 디스크에서 읽음 → 실제 I/O 성능
+후보 97건 ✅, 검색 37ms
+→ 671만 연산 병목
+```
 
-flush() → clearCache() 순서 필수
+### 4차: Multi-Interval Query + 사각형 MBR (현재)
+
+```
+격자 순회 → visited[PageId] 마킹 → Interval Merge
+PageId 12개, interval 5개
+후보 103건 (사각형 MBR), 결과 27건 ✅
+
+원형 필터링은 프론트엔드 위임
+→ 엔진은 I/O 최소화에 집중
+```
+
+**힐버트 곡선 위 interval 분포:**
+```
+[3766], [3772~3773], [3775], [3879~3884], [3889~3890]
+→ 5개 disjoint interval, PageId 12개만 I/O
 ```
 
 ---
@@ -181,20 +116,4 @@ benchmark/
   GeoHashBenchmark.java      GeoHash 성능 측정
   HilbertBenchmark.java      Hilbert 성능 측정
   BenchmarkRunner.java       3방향 비교 실행
-```
-
----
-
-## 향후 개선 가능성
-
-```
-힐버트 동적 delta:
-→ 현재 강남 기준 하드코딩 (steps * steps * 200)
-→ 좌표마다 경계 점프 크기가 다름
-→ 검색 시점에 8방향 실측으로 delta 동적 계산 시 정확도 향상
-
-교차 계산 알고리즘:
-→ 반경과 실제 교차하는 셀만 읽기
-→ GeoHash 후보 1,379건 → 추가 감소 가능
-→ Hilbert 후보 2,102건 → GeoHash 수준으로 감소 가능
 ```
