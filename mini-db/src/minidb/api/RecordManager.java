@@ -11,7 +11,7 @@ import java.util.Map;
 
 public class RecordManager {
 
-    private static final int MAX_PAGES = 10000;
+    private static final int MAX_PAGES = 100000;
     private final CacheManager cacheManager;
     private final Map<String, RecordId> index;
 

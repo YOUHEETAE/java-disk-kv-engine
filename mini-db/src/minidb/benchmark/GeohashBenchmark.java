@@ -15,6 +15,43 @@ import static minidb.benchmark.DummyDataGenerator.generateDummyList;
 public class GeohashBenchmark {
     private final static String TEST_DB = "geoHashDb";
 
+    public static long run(int count) throws Exception {
+        DiskManager diskManager;
+        CacheManager cacheManager = null;
+
+        try {
+            List<Hospital> hospitals = generateDummyList(count);
+
+            diskManager = new DiskManager(TEST_DB);
+            cacheManager = new CacheManager(diskManager);
+            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
+
+            for (Hospital hospital : hospitals) {
+                spatialRecordManager.put(hospital.coordinateY, hospital.coordinateX, Hospital.toBytes(hospital));
+            }
+
+            cacheManager.flush();
+            cacheManager.clearCache();
+
+            double searchLat = 37.4979;
+            double searchLng = 127.0276;
+            double radiusKm = 5.0;
+
+            long searchStart = System.currentTimeMillis();
+
+            for (byte[] values : spatialRecordManager.searchRadius(searchLat, searchLng, radiusKm)) {
+                Hospital hospital = Hospital.fromBytes("", values);
+                GeoUtils.haversine(searchLat, searchLng, hospital.coordinateY, hospital.coordinateX);
+            }
+
+            return System.currentTimeMillis() - searchStart;
+
+        } finally {
+            if (cacheManager != null) cacheManager.close();
+            Files.deleteIfExists(Path.of(TEST_DB));
+        }
+    }
+
     public static void main(String[] args) throws Exception {
 
         DiskManager diskManager;

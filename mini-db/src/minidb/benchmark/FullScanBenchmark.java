@@ -14,6 +14,43 @@ import static minidb.benchmark.DummyDataGenerator.generateDummyList;
 public class FullScanBenchmark {
     private final static String TEST_DB = "miniDb";
 
+    public static long run(int count) throws Exception {
+        DiskManager diskManager;
+        CacheManager cacheManager = null;
+
+        try {
+            List<Hospital> hospitals = generateDummyList(count);
+
+            diskManager = new DiskManager(TEST_DB);
+            cacheManager = new CacheManager(diskManager);
+            RecordManager recordManager = new RecordManager(cacheManager);
+
+            for (Hospital hospital : hospitals) {
+                recordManager.put(hospital.hospitalCode, Hospital.toBytes(hospital));
+            }
+
+            cacheManager.flush();
+            cacheManager.clearCache();
+
+            double searchLat = 37.4979;
+            double searchLng = 127.0276;
+            double radiusKm = 5.0;
+
+            long searchStart = System.currentTimeMillis();
+
+            for (byte[] values : recordManager.getAllValues()) {
+                Hospital hospital = Hospital.fromBytes("", values);
+                GeoUtils.haversine(searchLat, searchLng, hospital.coordinateY, hospital.coordinateX);
+            }
+
+            return System.currentTimeMillis() - searchStart;
+
+        } finally {
+            if (cacheManager != null) cacheManager.close();
+            Files.deleteIfExists(Path.of(TEST_DB));
+        }
+    }
+
     public static void main(String[] args) throws Exception {
 
         DiskManager diskManager;
