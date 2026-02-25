@@ -9,17 +9,19 @@ public class BenchmarkRunner {
     public static void main(String[] args) throws Exception {
         System.out.println("=== GeoSpatial Index Engine Benchmark ===");
         System.out.println();
-        System.out.printf("%-10s %-15s %-15s%n", "건수", "Full Scan", "GeoHash");
-        System.out.println("-".repeat(40));
+        System.out.printf("%-10s %-15s %-15s %-15s%n", "건수", "Full Scan", "GeoHash", "Hilbert");
+        System.out.println("-".repeat(55));
 
         for (int size : SIZES) {
             long fullScan = FullScanBenchmark.run(size);
             long geoHash = GeohashBenchmark.run(size);
+            long hilbert  = HilbertBenchmark.run(size);
 
-            System.out.printf("%-10d %-15s %-15s%n",
+            System.out.printf("%-10d %-15s %-15s %-15s%n",
                     size,
                     fullScan + "ms",
-                    geoHash + "ms"
+                    geoHash + "ms",
+                    hilbert + "ms"
             );
         }
 
