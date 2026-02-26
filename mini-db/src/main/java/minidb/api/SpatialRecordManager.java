@@ -46,6 +46,20 @@ public class SpatialRecordManager {
         cacheManager.putPage(page);
     }
 
+    // 병원 프로젝트 연동 메서드
+    public void put(double lat, double lng, String hospitalCode) {
+        put(lat, lng, hospitalCode.getBytes());
+    }
+    // 병원 프로젝트 연동 메서드
+    public List<String> searchRadiusCodes(double lat, double lng, double radiusKm) {
+        List<byte[]> raw = searchRadius(lat, lng, radiusKm);
+        List<String> codes = new ArrayList<>();
+        for (byte[] b : raw) {
+            codes.add(new String(b));
+        }
+        return codes;
+    }
+
     public List<byte[]> searchRadius(double lat, double lng, double radiusKm) {
         List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
         List<byte[]> results = new ArrayList<>();

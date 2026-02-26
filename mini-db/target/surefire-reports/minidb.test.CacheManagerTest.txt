@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: minidb.test.CacheManagerTest
 -------------------------------------------------------------------------------
-Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.077 s -- in minidb.test.CacheManagerTest
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.063 s -- in minidb.test.CacheManagerTest

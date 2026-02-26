@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: minidb.test.RecordManagerTest
 -------------------------------------------------------------------------------
-Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 17.31 s -- in minidb.test.RecordManagerTest
+Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 17.41 s -- in minidb.test.RecordManagerTest
