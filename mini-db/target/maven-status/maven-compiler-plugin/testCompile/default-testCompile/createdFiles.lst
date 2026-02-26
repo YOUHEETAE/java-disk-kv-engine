@@ -1,0 +1,7 @@
+minidb\test\CacheManagerTest.class
+minidb\test\DiskManagerTest.class
+minidb\test\RecordManagerTest.class
+minidb\test\GeohashIndexTest.class
+minidb\test\GeohashTest.class
+minidb\test\RecordIdTest.class
+minidb\test\SpatialRecordManagerTest.class
