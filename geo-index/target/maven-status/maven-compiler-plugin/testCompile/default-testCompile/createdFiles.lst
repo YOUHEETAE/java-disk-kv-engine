@@ -1,0 +1,7 @@
+geoindex\test\GeohashTest.class
+geoindex\test\RecordIdTest.class
+geoindex\test\RecordManagerTest.class
+geoindex\test\GeohashIndexTest.class
+geoindex\test\SpatialRecordManagerTest.class
+geoindex\test\CacheManagerTest.class
+geoindex\test\DiskManagerTest.class
