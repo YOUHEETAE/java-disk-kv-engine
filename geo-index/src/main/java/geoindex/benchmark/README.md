@@ -4,21 +4,29 @@
 
 ---
 
-## 테스트 환경
+## 벤치마크 구성
+
+### 더미 데이터 벤치마크 (규모별 성능 추세)
 
 | 항목 | 내용 |
 |------|------|
-| **데이터 규모** | 79,081건 (실제 병원 데이터 규모) |
+| **데이터** | 더미 병원 데이터 (SEED=42, 한국 좌표 범위) |
 | **검색 조건** | 강남 좌표 기준 반경 5km |
 | **검색 좌표** | lat: 37.4979, lng: 127.0276 |
-| **페이지 크기** | 4KB |
-| **캐시 전략** | Write-Back (검색 전 캐시 초기화) |
-| **랜덤 시드** | 42 (동일한 더미 데이터 보장) |
-| **필터링** | 사각형 MBR (원형 필터링은 프론트엔드 위임) |
+| **필터링** | 사각형 MBR |
+
+### 실제 데이터 벤치마크 (Spring 연동)
+
+| 항목 | 내용 |
+|------|------|
+| **데이터** | 실제 한국 병원 데이터 79,081건 |
+| **검색 조건** | 반경 5km |
+| **측정 방식** | Warm-up 5회 + 실측 50회 평균, 홀짝 교대 실행 |
+| **비교 대상** | Full Scan (MariaDB) vs GeoIndex (MiniDB → MariaDB IN 쿼리) |
 
 ---
 
-## 최종 벤치마크 결과
+## 더미 데이터 결과 (규모별)
 
 | 건수 | Full Scan | GeoHash | Hilbert |
 |------|----------|---------|---------|
@@ -34,92 +42,52 @@
 
 ---
 
+## 실제 병원 데이터 결과 (50회 평균)
+
+```
+Full Scan 평균:      65ms   (MariaDB WHERE BETWEEN + JOIN)
+GeoIndex 총 평균:    60ms
+  └ MiniDB 탐색:      0ms   (187 pageId → hospital_code 후보 추출)
+  └ MariaDB IN 쿼리:  60ms  (WHERE hospital_code IN (...))
+후보 감소:  79,081건 → 1,366건 (98.3% 감소)
+```
+
+### 해석
+
+더미 데이터에서는 GeoIndex가 압도적으로 빠르지만, 실제 데이터에서는 5ms 차이로 좁혀집니다. 이유는 두 가지입니다.
+
+**DB IN 쿼리 비용:** 1,366건 IN 쿼리가 생각보다 가볍지 않습니다. Full Scan이 65ms로 빠른 이유는 MariaDB 인덱스와 쿼리 캐시가 이미 최적화되어 있기 때문입니다.
+
+**MiniDB의 실제 기여:** MiniDB 탐색 자체는 0ms입니다. 후보를 98.3% 줄인 덕분에 IN 쿼리 비용도 감소했으며, 캐시 적중 시 IN 쿼리도 추가로 단축될 여지가 있습니다.
+
+---
+
 ## PageId 탐색 수 비교 (반경 5km, 강남 기준)
 
-| 방식 | PageId 수 | interval 수 | 후보 수 |
-|------|----------|------------|--------|
-| Full Scan | 10,000 | 1 | 79,081건 |
-| 선형 범위 | 275 | 1 | 2,102건 |
-| GeoHash | 169 | 분산 | 1,379건 |
-| **Hilbert Multi-Interval** | **13** | **5** | **103건** |
-
-## Page Seek Count 비교 (반경 5km, 강남 기준)
-
-| 방식 | PageId 수 | Seek Count | 비고 |
-|------|----------|-----------|------|
-| GeoHash | 169 | 720 | 분산된 랜덤 I/O |
-| **Hilbert Multi-Interval** | **13** | **124** | **순차 I/O에 가까움** |
-
-```
-Hilbert가 GeoHash 대비 Seek Count 5.8x 적음
-
-GeoHash:  [5 → 402 → 11 → 390 → ...]  ← 디스크 헤드 점프
-Hilbert:  [3766 → 3772 → 3773 → ...]  ← 순차 읽기
-```
-
-Seek Count = 인접 PageId 간 거리(|p[i+1] - p[i]|)의 합
-→ 낮을수록 순차 I/O, 높을수록 랜덤 I/O
+| 방식 | PageId 수 | 후보 수 |
+|------|----------|--------|
+| Full Scan | 전체 | 79,081건 |
+| GeoHash | 187 | 1,366건 |
+| **Hilbert Multi-Interval** | **12** | **103건** |
 
 ---
 
-## GeoHash 설계 개선 과정
-
-### 1차: 3×3 고정 셀
+## Page Seek Count 비교
 
 ```
-후보 70건, 결과 4건 (27건 중 23건 누락)
-→ 반경 5km를 3.6km로 커버 불가
+GeoHash:  PageId 187개 → Seek Count 720
+Hilbert:  PageId  12개 → Seek Count 124
+
+Hilbert가 GeoHash 대비 Seek Count 5.8배 적음
 ```
 
-### 2차: 동적 셀 범위 (현재)
-
 ```
-steps = ceil(5.0 / 1.2) + 1 = 6 → 13×13 = 169개 셀
-후보 1,379건, 결과 27건 ✅
+GeoHash:  [5 → 402 → 11 → 390 → ...]  ← 분산된 랜덤 I/O
+Hilbert:  [3766 → 3772 → 3773 → ...]  ← 연속 순차 I/O
 ```
 
----
-
-## Hilbert 설계 개선 과정
-
-### 1차: % MAX_PAGE
-
-```
-delta > MAX_PAGE → 전체 PageId 커버 → Full Scan 退化
-후보 79,081건, 결과 0건
-```
-
-### 2차: / RANGE_PER_PAGE + delta 하드코딩
-
-```
-delta = steps * steps * 200
-PageId 275개, interval 1개, 후보 2,102건 ✅
-→ 엉뚱한 지역 포함, delta 하드코딩 한계
-```
-
-### 3차: 격자 순회
-
-```
-후보 97건 ✅, 검색 37ms
-→ 671만 연산 병목
-```
-
-### 4차: Multi-Interval Query + 사각형 MBR (현재)
-
-```
-격자 순회 → visited[PageId] 마킹 → Interval Merge
-PageId 13개, interval 5개
-후보 103건 (사각형 MBR), 결과 27건 ✅
-
-원형 필터링은 프론트엔드 위임
-→ 엔진은 I/O 최소화에 집중
-```
-
-**힐버트 곡선 위 interval 분포:**
-```
-[3766], [3772~3773], [3775], [3879~3884], [3889~3890]
-→ 5개 disjoint interval, PageId 13개만 I/O
-```
+Seek Count = 인접 PageId 간 거리(`|p[i+1] - p[i]|`) 합계
+→ 낮을수록 디스크 헤드 이동 최소화 → HDD 환경에서 유리
 
 ---
 
@@ -127,10 +95,23 @@ PageId 13개, interval 5개
 
 ```
 benchmark/
-  Hospital.java              병원 데이터 클래스 (toBytes/fromBytes)
-  DummyDataGenerator.java    79,081건 더미 데이터 생성 (SEED=42)
-  FullScanBenchmark.java     Full Scan 성능 측정
-  GeoHashBenchmark.java      GeoHash 성능 측정
-  HilbertBenchmark.java      Hilbert 성능 측정
-  BenchmarkRunner.java       3방향 비교 실행
+  Hospital.java              병원 데이터 클래스 (toBytes / fromBytes)
+  DummyDataGenerator.java    더미 데이터 생성 (SEED=42)
+  FullScanBenchmark.java     Full Scan 측정
+  GeoHashBenchmark.java      GeoHash 측정
+  HilbertBenchmark.java      Hilbert 측정
+  BenchmarkRunner.java       3방향 비교 + Seek Count 비교 실행
+  SeekCountBenchmark.java    PageId 목록 → Seek Count 계산
+```
+
+---
+
+## 실행 방법
+
+```bash
+# 더미 데이터 3방향 비교
+mvn exec:java -Dexec.mainClass="geoindex.benchmark.BenchmarkRunner"
+
+# 실제 병원 데이터 비교 (Spring 연동)
+GET /benchmark/compare?userLat=37.4979&userLng=127.0276&radius=5.0
 ```
