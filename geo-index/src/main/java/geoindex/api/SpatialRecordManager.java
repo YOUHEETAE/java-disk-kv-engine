@@ -5,10 +5,7 @@ import geoindex.index.SpatialIndex;
 import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.List;
+import java.util.*;
 
 public class SpatialRecordManager {
 
@@ -80,6 +77,38 @@ public class SpatialRecordManager {
         }
 
         return results;
+    }
+
+    public Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
+        List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
+        Map<Integer, List<String>> result = new LinkedHashMap<>();
+
+        for (int pageId : pageIds) {
+            Page page = cacheManager.getPage(pageId);
+            if (!PageLayout.isInitialized(page)) continue;
+
+            List<String> codes = new ArrayList<>();
+
+            for (byte[] bytes : PageLayout.readAllRecords(page)) {
+                codes.add(new String(bytes));
+            }
+
+            int overflowPageId = PageLayout.getOverflowPageId(page);
+            while (overflowPageId != PageLayout.NO_OVERFLOW) {
+                Page overflowPage = cacheManager.getPage(overflowPageId);
+                if (!PageLayout.isInitialized(overflowPage)) break;
+                for (byte[] bytes : PageLayout.readAllRecords(overflowPage)) {
+                    codes.add(new String(bytes));
+                }
+                overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+            }
+
+            if (!codes.isEmpty()) {
+                result.put(pageId, codes);
+            }
+        }
+
+        return result;
     }
 
     public List<String> searchRadiusCodes(double lat, double lng, double radiusKm) {
