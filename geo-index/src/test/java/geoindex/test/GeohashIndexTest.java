@@ -68,11 +68,14 @@ class GeohashIndexTest {
         double kmPerDegreeLon = 111.32 * Math.cos(Math.toRadians(lat));
         double deltaDegreeX = radius / kmPerDegreeLon;
 
+        for (int precision : new int[]{6,7,8}){
+
+
         long[] corners = {
-                GeoHash.toMorton(lat - deltaDegreeY, lng - deltaDegreeX, 6),
-                GeoHash.toMorton(lat - deltaDegreeY, lng + deltaDegreeX, 6),
-                GeoHash.toMorton(lat + deltaDegreeY, lng - deltaDegreeX, 6),
-                GeoHash.toMorton(lat + deltaDegreeY, lng + deltaDegreeX, 6)
+                GeoHash.toMorton(lat - deltaDegreeY, lng - deltaDegreeX, precision),
+                GeoHash.toMorton(lat - deltaDegreeY, lng + deltaDegreeX, precision),
+                GeoHash.toMorton(lat + deltaDegreeY, lng - deltaDegreeX, precision),
+                GeoHash.toMorton(lat + deltaDegreeY, lng + deltaDegreeX, precision)
         };
 
         long minLngBits = Long.MAX_VALUE, maxLngBits = Long.MIN_VALUE;
@@ -88,20 +91,32 @@ class GeohashIndexTest {
         System.out.println("lat loop 횟수: " + (maxLatBits - minLatBits + 1));
         System.out.println("lng loop 횟수: " + (maxLngBits - minLngBits + 1));
 
-        for (int shift = 10; shift >= 4; shift--) {
+        // 정규화 상수 (GeoHashIndex와 동일)
+            long minMorton = GeoHash.toMorton(33.0, 124.0, precision);
+            long maxMorton = GeoHash.toMorton(38.6, 132.0, precision);
+
+        for (int maxPages : new int[]{512, 1024, 2048, 4096}) {
+            long mortonRange = maxMorton - minMorton;
             Set<Integer> pageSet = new HashSet<>();
+            int maxPageId = 0;
+
             for (long latBits = minLatBits; latBits <= maxLatBits; latBits++) {
                 for (long lngBits = minLngBits; lngBits <= maxLngBits; lngBits++) {
                     long morton = GeoHash.interleave(lngBits, latBits);
-                    pageSet.add((int)(morton >> shift));
+                    long offset = Math.max(0, morton - minMorton);
+                    int pageId = (int) Math.min(offset * maxPages / mortonRange, maxPages - 1);
+                    pageSet.add(pageId);
+                    maxPageId = Math.max(maxPageId, pageId);
                 }
             }
-            int min = pageSet.stream().mapToInt(i->i).min().getAsInt();
-            int max = pageSet.stream().mapToInt(i->i).max().getAsInt();
-            long dbSize = (long)(max + 1) * 4096 / 1024 / 1024;
-            System.out.println("SHIFT=" + shift + " → pageIds=" + pageSet.size()
-                    + " | max pageId=" + max
-                    + " | db 예상=" + dbSize + "MB");
+
+            long dbSize = (long) (maxPages) * 4096 / 1024 / 1024;
+            System.out.println("MAX_PAGES=" + maxPages
+                    + " → pageIds=" + pageSet.size()
+                    + " | max pageId=" + maxPageId
+                    + " | db 크기=" + dbSize + "MB");
+            System.out.println("PRECISION=" + precision + " MAX_PAGES=1024 → pageIds=...");
+        }
         }
     }
     @Test
@@ -174,6 +189,17 @@ class GeohashIndexTest {
                 System.out.println("처음 차이나는 비트: " + i + "번째");
                 break;
             }
+        }
+    }
+    @Test
+    void debugMortonRange() {
+        for (int precision : new int[]{6, 7, 8}) {
+            long minMorton = GeoHash.toMorton(33.0, 124.0, precision);
+            long maxMorton = GeoHash.toMorton(38.6, 132.0, precision);
+            System.out.println("PRECISION=" + precision
+                    + " minMorton=" + minMorton
+                    + " maxMorton=" + maxMorton
+                    + " range=" + (maxMorton - minMorton));
         }
     }
 }
