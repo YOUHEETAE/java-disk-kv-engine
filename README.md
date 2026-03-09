@@ -108,38 +108,17 @@ Cold Start 없음 → 첫 요청에 자연스럽게 캐시 채워짐
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
 </div>
 
-| 건수 | Full Scan | GeoHash | Hilbert |
-|------|----------|---------|---------|
-| 10,000 | 100ms | 6.8ms | 29ms |
-| 20,000 | 133ms | 6.8ms | 33ms |
-| 30,000 | 259ms | 6.8ms | 32ms |
-| 50,000 | 292ms | 6.8ms | 33ms |
-| 79,081 | 434ms | 6.8ms | 33ms |
-| 100,000 | 528ms | 6.8ms | 47ms |
-| 200,000 | 660ms | 6.8ms | 24ms |
-| 500,000 | 768ms | 6.8ms | 24ms |
-| 1,000,000 | 1,177ms | 6ms | 34ms |
-
-> GeoHash avg: **6.8ms** (P95: 9.1ms) / Hilbert avg: **33ms** (P95: 41ms)
-
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
 - **GeoHash**: 공간 밀도에 의존 O(P) → 대규모 데이터에서도 일정한 검색 성능 유지
 - **Hilbert**: Multi-Interval Query로 필요한 pageId만 정확히 탐색
 
-### 실서비스 벤치마크 — GeoIndex 단독 (50회 평균)
+### 실서비스 벤치마크 (실제 한국 병원 79,081건)
 
-> 측정 조건: 실제 한국 병원 79,081건 / Warm-up 5회 제외 / 홀짝 교대 실행으로 캐시 편향 제거
+> 측정 조건: Warm-up 5회 제외 / 홀짝 교대 실행으로 캐시 편향 제거 / 3종 시나리오 100회
 
 <div align=center>
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/production_benchmark_chart.png" width="700"/>
-</div
-
-| 방식 | geo-index 탐색 | DB 조회 | 총 시간 | 후보 수 |
-|------|--------------|--------|--------|--------|
-| Full Scan | - | 65ms | 65ms | 79,081건 스캔 |
-| GeoIndex | 0ms | 60ms | 60ms | 1,366건 |
-
-> GeoIndex geo-index 탐색 0ms, 후보 **98.3% 감소** (79,081건 → 1,366건)
+</div>
 
 **GeoIndex 단독이 Full Scan과 유사한 이유:**
 
@@ -147,70 +126,25 @@ Cold Start 없음 → 첫 요청에 자연스럽게 캐시 채워짐
 79,081건은 MariaDB 버퍼풀에 전부 상주 → 두 방식 모두 메모리 스캔
 IN (1,366건) 쿼리 오버헤드 ≈ BETWEEN 범위 스캔 비용
 
-→ 소규모 데이터에서 GeoIndex 단독의 DB 레벨 이점은 제한적
 → GeoIndex의 실제 역할 = 후보 감소가 아니라 pageId 단위 캐시 키 제공
 ```
 
 **데이터가 폭증할 경우 GeoHash가 빛을 발한다:**
 
 ```
-더미 데이터 벤치마크 (순수 엔진 성능):
-  10만 건  → Full Scan 528ms  / GeoHash  7ms  →  75배
-  100만 건 → Full Scan 1177ms / GeoHash  6ms  → 118배
+10만 건  → Full Scan 528ms  / GeoHash  7ms  →  75배
+100만 건 → Full Scan 1177ms / GeoHash  6ms  → 118배
 
-Full Scan은 데이터량에 따라 선형 증가 O(N)
-GeoHash는 반경 내 pageId 수에만 의존 O(P) → 데이터가 늘어도 거의 일정
 → 데이터가 버퍼풀을 초과하는 순간 디스크 I/O 차이가 폭발적으로 벌어짐
 ```
-
-### 실서비스 벤치마크 — GeoIndex+Cache 3종 (100회 평균)
-
-> 측정 조건: Warm-up 5회 + 실측 100회 / 3방식 순서 교대 실행
-
-| 시나리오 | Full Scan | GeoIndex+Cache | 개선율 | Cache HIT율 |
-|---------|----------|---------------|-------|------------|
-| **Random** (완전 랜덤 좌표) | 10ms | 8ms | 1.2x | 5.8% |
-| **Mixed** (70% Hotspot + 30% Random) | 87ms | 3ms | **24.6x** | 95.9% |
-| **Hotspot** (서울 주요 10개 지역 순환) | 125ms | 2ms | **46.8x** | 98.6% |
 
 **시나리오별 해석:**
 
 ```
-Random (Worst Case):
-  완전 랜덤 좌표 = 캐시 재사용 불가
-  HIT 5.8% → Cache 이점 없음
-  GeoIndex 단독 성능 확인
-
-Mixed (현실적 서비스):
-  70% 핫스팟 좌표가 캐시 Warm-up 후 HIT 95.9%
-  30% 랜덤은 MISS 발생하지만 평균에 흡수됨
-  실제 서비스 패턴에 가장 근접한 시나리오
-
-Hotspot (Best Case):
-  서울 주요 지역 10개 순환
-  Warm-up 이후 HIT 100% 수렴 → 0~2ms 유지
-  Redis 없이 JVM 캐시만으로 달성
+Random (Worst Case):   완전 랜덤 좌표 = 캐시 재사용 불가 → HIT 5.8%
+Mixed  (현실적 서비스): 70% 핫스팟 HIT 95.9% → 24.6x 개선
+Hotspot (Best Case):   서울 주요 지역 순환 → HIT 98.6% → 46.8x 개선
 ```
-
----
-
-## PageId 탐색 수 비교 (반경 5km, 강남 기준)
-
-| 방식 | PageId 수 | interval 수 | 후보 수 |
-|------|----------|------------|--------|
-| Full Scan | 전체 | 1 | 79,081건 |
-| 선형 범위 | 275 | 1 | 2,102건 |
-| GeoHash | 187 | 분산 | 1,366건 |
-| Hilbert Multi-Interval | **13** | **5** | **103건** |
-
-## Page Seek Count 비교 (강남 반경 5km)
-
-| 방식 | PageId 수 | Seek Count |
-|------|----------|-----------|
-| GeoHash | 169 | 720 |
-| **Hilbert Multi-Interval** | **13** | **124** |
-
-Hilbert가 GeoHash 대비 Seek Count **5.8배 적음** → 순차 I/O에 가까움
 
 ---
 
