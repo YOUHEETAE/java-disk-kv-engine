@@ -302,6 +302,8 @@ geo-index/
     - 캐시 크기 제한 (Max Entry + LRU Eviction)
     - TTL (만료 시간, 주 1회 배치 업데이트 주기에 맞춤)
     - 엔진 재빌드 시 기존 데이터 초기화 (delete 없이 파일 교체)
+    - 동시성 처리 (Thundering Herd 방지)
+    - 장애 복구 (파일 손상 감지 + 복구)
 ```
 
 ---
