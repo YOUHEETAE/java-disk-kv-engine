@@ -1,7 +1,11 @@
-# MiniDB — Geospatial Index Engine
+# MiniDB — Spatial Page Cache Engine
 
-> **실제 배포 환경에서 경험한 공간 쿼리 성능 문제를 해결하기 위해 설계한 커스텀 DB 엔진**
-> MariaDB 공간 인덱스(30–50ms)와 Redis Geohash 캐싱(29–124ms)의 한계를 직접 구현으로 극복
+> **위치 기반 병원 검색에서 반경 쿼리는 동일 지역 요청이 반복되는 특성이 있다.**
+> 하지만 기존 구조는 매번 DB를 조회한다.
+>
+> → Spatial Index로 좌표를 pageId로 클러스터링
+> → pageId 단위 JVM Cache로 DB 접근 제거
+> → 외부 인프라(Redis) 없이 서비스 내 메모리만으로 해결
 
 ---
 
@@ -11,7 +15,8 @@
 
 ```
 문제 1: MariaDB SPATIAL INDEX
-  MBRContains 공간 연산 오버헤드 → 풀스캔보다 느림 (30–50ms)
+  서비스 환경의 쿼리 패턴에서 MBRContains 공간 연산 오버헤드로
+  기대만큼의 성능 개선을 얻지 못함 (30–50ms)
 
 문제 2: Redis Geohash 캐싱
   외부 인프라 의존성 + 네트워크 왕복 지연 (29–124ms)
@@ -227,6 +232,23 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 → 재빌드 중 이전 파일로 서비스 유지
 → 완료 후 파일 교체 (atomic rename)
 → JVM 캐시도 재빌드 시 자동 초기화
+```
+
+---
+
+## 핵심 인사이트
+
+```
+Spatial Index 자체는 DB 쿼리 성능을 크게 개선하지 않을 수 있다.
+
+실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
+Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
+
+하지만 Spatial Index가 제공하는 pageId는
+"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
+
+pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
+→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
 ```
 
 ---
