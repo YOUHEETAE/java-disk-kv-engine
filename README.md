@@ -130,6 +130,10 @@ Cold Start 없음 → 첫 요청에 자연스럽게 캐시 채워짐
 
 > 측정 조건: 실제 한국 병원 79,081건 / Warm-up 5회 제외 / 홀짝 교대 실행으로 캐시 편향 제거
 
+<div align=center>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/production_benchmark_chart.png" width="700"/>
+</div
+
 | 방식 | geo-index 탐색 | DB 조회 | 총 시간 | 후보 수 |
 |------|--------------|--------|--------|--------|
 | Full Scan | - | 65ms | 65ms | 79,081건 스캔 |
