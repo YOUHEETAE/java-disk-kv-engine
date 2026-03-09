@@ -257,6 +257,11 @@ spring-app/
     - pageId 전체 저장 + MBR 필터링으로 누락/초과 방지
     - Random / Mixed / Hotspot 100회 시나리오 측정
     - Mixed 24.6x / Hotspot 46.8x 개선 확인
+
+⬜ Phase 10: 캐시 운영 고도화
+    - 캐시 크기 제한 (Max Entry + LRU Eviction)
+    - TTL (만료 시간, 주 1회 배치 업데이트 주기에 맞춤)
+    - 엔진 재빌드 시 기존 데이터 초기화 (delete 없이 파일 교체)
 ```
 
 ---
