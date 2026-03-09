@@ -23,3 +23,10 @@ Thumbs.db
 
 # --- 로그 파일 ---
 *.log
+
+# --- 빌드 ---
+target/
+geo-index/target/
+
+# --- 테스트 파일 ---
+*.db

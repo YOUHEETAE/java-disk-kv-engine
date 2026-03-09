@@ -111,6 +111,29 @@ public class SpatialRecordManager {
         return result;
     }
 
+    public List<String> getAllCodesByPageId(int pageId) {
+        Page page = cacheManager.getPage(pageId);
+        if (!PageLayout.isInitialized(page)) return Collections.emptyList();
+
+        List<String> codes = new ArrayList<>();
+
+        for (byte[] bytes : PageLayout.readAllRecords(page)) {
+            codes.add(new String(bytes));
+        }
+
+        int overflowPageId = PageLayout.getOverflowPageId(page);
+        while (overflowPageId != PageLayout.NO_OVERFLOW) {
+            Page overflowPage = cacheManager.getPage(overflowPageId);
+            if (!PageLayout.isInitialized(overflowPage)) break;
+            for (byte[] bytes : PageLayout.readAllRecords(overflowPage)) {
+                codes.add(new String(bytes));
+            }
+            overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+        }
+
+        return codes;
+    }
+
     public List<String> searchRadiusCodes(double lat, double lng, double radiusKm) {
         List<byte[]> results = searchRadius(lat, lng, radiusKm);
         List<String> codes = new ArrayList<>();
