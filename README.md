@@ -28,6 +28,49 @@
 
 ---
 
+## 아키텍처
+
+```mermaid
+flowchart TD
+    REQ([HTTP 요청]) --> SCS
+
+    subgraph Spring["Spring Application"]
+        SCS["SpatialCacheService\n(SpatialCache<T> 주입)"]
+    end
+
+    subgraph Engine["geo-index Engine (순수 Java)"]
+        SCI["SpatialCache<T>\n인터페이스"]
+        SCE["SpatialCacheEngine<T>\n구현체"]
+        SRM["SpatialRecordManager\npageId 목록 계산 (0ms)"]
+        IDX["GeoHashIndex\nMorton 코드 → pageId"]
+        CHM["ConcurrentHashMap\nMap<pageId, List<T>>"]
+
+        subgraph Storage["Storage Layer"]
+            CM["CacheManager\nWrite-Back"]
+            DM["DiskManager\nsparse 매핑 테이블"]
+            PG["Page 4KB"]
+        end
+
+        SCI --> SCE
+        SCE --> SRM
+        SCE --> CHM
+        SRM --> IDX
+        IDX --> CM
+        CM --> DM
+        DM --> PG
+    end
+
+    DB[("MariaDB")]
+
+    SCS --> SCI
+    CHM -->|HIT| RES([즉시 반환])
+    CHM -->|MISS| DB
+    DB -->|결과 저장| CHM
+    DB --> RES
+```
+
+---
+
 ## 핵심 설계
 
 ### Storage 레이어
@@ -204,6 +247,10 @@ geo-index/
   api/
     RecordManager.java          Key-Value 저장
     SpatialRecordManager.java   공간 인덱스 저장/검색
+    SpatialCache.java           JVM 캐시 인터페이스 (Spring 의존성 분리)
+    PageResult.java             캐시 조회 결과 값 객체
+  cache/
+    SpatialCacheEngine.java     SpatialCache<T> 구현체 (pageId 단위 Lazy 캐시)
   index/
     SpatialIndex.java       인터페이스
     GeoHash.java            Morton 코드 인코딩/디코딩
@@ -217,13 +264,6 @@ geo-index/
     BenchmarkRunner.java        3방향 비교 실행
   util/
     GeoUtils.java           Haversine 거리 계산
-
-spring-app/
-  service/
-    SpatialCacheService.java    pageId 단위 JVM 캐시
-    HospitalSearchBenchmark.java  3종 시나리오 벤치마크
-  controller/
-    BenchmarkController.java    벤치마크 REST API
 ```
 
 ---
