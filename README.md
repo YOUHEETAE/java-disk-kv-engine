@@ -35,37 +35,35 @@ flowchart TD
     REQ([HTTP 요청]) --> SCS
 
     subgraph Spring["Spring Application"]
-        SCS["SpatialCacheService\n(SpatialCache<T> 주입)"]
+        SCS["SpatialCacheService"]
     end
 
     subgraph Engine["geo-index Engine (순수 Java)"]
-        SCI["SpatialCache<T>\n인터페이스"]
-        SCE["SpatialCacheEngine<T>\n구현체"]
-        SRM["SpatialRecordManager\npageId 목록 계산 (0ms)"]
+        SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
+        SCE["SpatialCacheEngine<T>\ngetOrMiss / put / clearCache"]
         IDX["GeoHashIndex\nMorton 코드 → pageId"]
-        CHM["ConcurrentHashMap\nMap<pageId, List<T>>"]
+        CHM["ConcurrentHashMap\nMap<pageId, CacheEntry<T>>"]
 
         subgraph Storage["Storage Layer"]
-            CM["CacheManager\nWrite-Back"]
-            DM["DiskManager\nsparse 매핑 테이블"]
+            CM["CacheManager\nWrite-Back + rebuild"]
+            DM["DiskManager\nsparse 매핑 + atomic rename"]
             PG["Page 4KB"]
         end
 
-        SCI --> SCE
-        SCE --> SRM
+        SRM --> SCE
         SCE --> CHM
         SRM --> IDX
-        IDX --> CM
+        SRM --> CM
         CM --> DM
         DM --> PG
     end
 
     DB[("MariaDB")]
 
-    SCS --> SCI
+    SCS --> SRM
     CHM -->|HIT| RES([즉시 반환])
     CHM -->|MISS| DB
-    DB -->|결과 저장| CHM
+    DB -->|putCache| CHM
     DB --> RES
 ```
 
@@ -93,13 +91,6 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 4차: Morton 직접 pageId + sparse 매핑 테이블 → 187개 분산 ✅
 ```
 
-```
-Morton 코드(Z-curve 비트 인터리빙) 값을 직접 pageId로 사용
-+ DiskManager sparse 매핑 테이블 (HashMap<pageId, 파일오프셋>)
-→ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
-→ 반경 5km = 187개 pageId로 분산 (이전 1~2개 → 187개)
-```
-
 → 설계 개선 상세 기록: [GEOHASH_IMPLEMENTATION.md](./geo-index/src/main/java/geoindex/index/GEOHASH_IMPLEMENTATION.md)
 
 ### Hilbert Multi-Interval Query
@@ -117,14 +108,14 @@ Morton 코드(Z-curve 비트 인터리빙) 값을 직접 pageId로 사용
 → 5개 disjoint interval, pageId 12개만 I/O
 ```
 
-### JVM 캐시 (SpatialCacheService)
+### JVM 캐시 + rebuild()
 
 ```
 첫 요청:
   MiniDB → pageId 목록 반환 (0ms)
   pageId별 캐시 확인 → MISS
   MariaDB → 전체 데이터 조회
-  결과 → Map<pageId, List<HospitalData>> 저장
+  결과 → putCache() → JVM 캐시 저장
 
 두 번째 요청 (같은 반경):
   MiniDB → pageId 목록 반환 (0ms)
@@ -132,11 +123,15 @@ Morton 코드(Z-curve 비트 인터리빙) 값을 직접 pageId로 사용
   MariaDB 왕복 없음 → 즉시 반환
 ```
 
-Redis 대비 장점:
+배치 업데이트 시:
 ```
-HashMap.get() → 나노초 (MGET 네트워크 왕복 없음)
-Cold Start 없음 → 첫 요청에 자연스럽게 캐시 채워짐
-외부 인프라 불필요
+spatialRecordManager.rebuild(srm ->
+    hospitalRepo.findAllCodes().forEach(h ->
+        srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
+    )
+);
+→ atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
+→ 요청 중단 없음
 ```
 
 ---
@@ -184,9 +179,9 @@ IN (1,366건) 쿼리 오버헤드 ≈ BETWEEN 범위 스캔 비용
 **시나리오별 해석:**
 
 ```
-Random (Worst Case):   완전 랜덤 좌표 = 캐시 재사용 불가 → HIT 5.8%
-Mixed  (현실적 서비스): 70% 핫스팟 HIT 95.9% → 24.6x 개선
-Hotspot (Best Case):   서울 주요 지역 순환 → HIT 98.6% → 46.8x 개선
+Random (Worst Case):    완전 랜덤 좌표 = 캐시 재사용 불가 → HIT  5.8% →  1.2x
+Mixed  (현실적 서비스):  70% 핫스팟     → HIT 95.9%        → 24.6x
+Hotspot (Best Case):    서울 주요 지역 순환 → HIT 98.6%    → 46.8x
 ```
 
 ---
@@ -210,9 +205,8 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 ```
 병원 데이터는 주 1회 대량 배치 업데이트
 → 매주 MiniDB 전체 재빌드 (delete 불필요)
-→ 재빌드 중 이전 파일로 서비스 유지
-→ 완료 후 파일 교체 (atomic rename)
-→ JVM 캐시도 재빌드 시 자동 초기화
+→ 재빌드 중 이전 파일로 서비스 유지 (atomic rename)
+→ 완료 후 파일 교체 + JVM 캐시 자동 초기화
 ```
 
 ---
@@ -240,17 +234,18 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 geo-index/
   storage/
     Page.java               4KB 페이지
-    DiskManager.java        sparse 매핑 테이블 기반 디스크 I/O
+    DiskManager.java        sparse 매핑 테이블 + atomic rename rebuild
     PageLayout.java         슬롯 페이지 구조
   buffer/
-    CacheManager.java       Write-Back 캐싱
+    CacheManager.java       Write-Back 캐싱 + rebuild
   api/
     RecordManager.java          Key-Value 저장
-    SpatialRecordManager.java   공간 인덱스 저장/검색
-    SpatialCache.java           JVM 캐시 인터페이스 (Spring 의존성 분리)
+    SpatialRecordManager.java   최상단 API (search / put / putCache / rebuild)
     PageResult.java             캐시 조회 결과 값 객체
   cache/
-    SpatialCacheEngine.java     SpatialCache<T> 구현체 (pageId 단위 Lazy 캐시)
+    SpatialCacheEngine.java     JVM 캐시 (getOrMiss / put / clearCache)
+    CachePolicy.java            TTL / maxSize 정책
+    CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
   index/
     SpatialIndex.java       인터페이스
     GeoHash.java            Morton 코드 인코딩/디코딩
@@ -258,10 +253,10 @@ geo-index/
     HilbertCurve.java       힐버트 곡선 계산
     HilbertIndex.java       Multi-Interval Query 구현
   benchmark/
-    FullScanBenchmark.java      Full Scan 측정
-    GeoHashBenchmark.java       GeoHash 측정
-    HilbertBenchmark.java       Hilbert 측정
-    BenchmarkRunner.java        3방향 비교 실행
+    FullScanBenchmark.java
+    GeoHashBenchmark.java
+    HilbertBenchmark.java
+    BenchmarkRunner.java
   util/
     GeoUtils.java           Haversine 거리 계산
 ```
@@ -297,13 +292,13 @@ geo-index/
     - pageId 전체 저장 + MBR 필터링으로 누락/초과 방지
     - Random / Mixed / Hotspot 100회 시나리오 측정
     - Mixed 24.6x / Hotspot 46.8x 개선 확인
-
-⬜ Phase 10: 캐시 운영 고도화
-    - 캐시 크기 제한 (Max Entry + LRU Eviction)
-    - TTL (만료 시간, 주 1회 배치 업데이트 주기에 맞춤)
-    - 엔진 재빌드 시 기존 데이터 초기화 (delete 없이 파일 교체)
-    - 동시성 처리 (Thundering Herd 방지)
-    - 장애 복구 (파일 손상 감지 + 복구)
+✅ Phase 10: 캐시 운영 고도화
+    - CachePolicy (TTL / maxSize), CacheEntry (만료시각 래퍼)
+    - SpatialCacheEngine 리팩토링 (SpatialRecordManager 의존성 제거)
+    - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
+    - atomic rename 기반 무중단 rebuild
+    - SpatialCache<T> 인터페이스 제거 (단순화)
+⬜ Phase 12: 체크섬 기반 파일 손상 감지 + 자동 재빌드
 ```
 
 ---
