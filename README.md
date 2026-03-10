@@ -298,7 +298,7 @@ geo-index/
     - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
     - atomic rename 기반 무중단 rebuild
     - SpatialCache<T> 인터페이스 제거 (단순화)
-⬜ Phase 12: 체크섬 기반 파일 손상 감지 + 자동 재빌드
+⬜ Phase 11: 체크섬 기반 파일 손상 감지 + 자동 재빌드
 ```
 
 ---
