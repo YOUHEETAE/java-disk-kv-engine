@@ -1,6 +1,6 @@
 # API 모듈
 
-공간 인덱스 기반 저장/검색 엔진 + 캐시 계층 인터페이스
+공간 인덱스 기반 저장/검색 엔진 — 최상단 API 레이어
 
 ---
 
@@ -13,6 +13,10 @@
 **API:**
 ```java
 void put(double lat, double lng, byte[] value)
+void rebuild(Consumer<SpatialRecordManager> loader)
+
+List<PageResult<T>> search(double lat, double lng, double radiusKm)
+void putCache(int pageId, List<T> data)
 
 List<byte[]> searchRadius(double lat, double lng, double radiusKm)
 List<String> searchRadiusCodes(double lat, double lng, double radiusKm)
@@ -23,10 +27,34 @@ List<String> getAllCodesByPageId(int pageId)
 
 | 메서드 | 반환 | 용도 |
 |--------|------|------|
+| `put` | void | 파일에 병원 코드 저장 |
+| `rebuild` | void | 파일 재구축 + JVM 캐시 초기화 |
+| `search` | `List<PageResult<T>>` | HIT/MISS 판단 후 반환 |
+| `putCache` | void | MISS 후 DB 결과 JVM 캐시 저장 |
 | `searchRadius` | `List<byte[]>` | 더미 데이터 벤치마크 |
 | `searchRadiusCodes` | `List<String>` | 병원 코드 목록 |
 | `searchRadiusCodesByPageId` | `Map<pageId, List<String>>` | 캐시 HIT/MISS 분기 |
 | `getAllCodesByPageId` | `List<String>` | MISS pageId 전체 codes 조회 |
+
+**`search()`가 필요한 이유:**
+```
+기존 방식: SpatialCacheEngine이 SpatialRecordManager를 직접 참조
+  → 순환 참조 위험, Spring이 두 빈을 모두 알아야 함
+
+현재 방식: SpatialRecordManager.search()가 cacheEngine.getOrMiss() 위임
+  → 단방향 의존성 (SpatialCacheEngine → SpatialRecordManager 없음)
+  → Spring은 SpatialRecordManager만 알면 됨
+```
+
+**`rebuild()`가 필요한 이유:**
+```
+단순 삭제 + 재생성:
+  파일 교체 중 요청 → 빈 파일 읽음 ❌
+
+rebuild() + atomic rename:
+  임시 파일에 구축 → rename 전까지 기존 파일 서비스 → JVM 캐시 초기화
+  요청 중단 없음 ✅
+```
 
 **`searchRadiusCodesByPageId`가 필요한 이유:**
 ```
@@ -46,19 +74,6 @@ MISS 시 반경 내 codes만 DB 조회 후 캐시 저장하면:
 
 → pageId 전체 codes를 DB 조회 후 저장
 → overflow 체인까지 순회해서 해당 페이지의 모든 records 반환
-```
-
----
-
-### SpatialCache\<T\> (인터페이스)
-
-캐시 엔진의 추상화 계층입니다. Spring을 포함한 상위 레이어는 이 인터페이스만 의존합니다.
-
-```java
-public interface SpatialCache<T> {
-    List<PageResult<T>> search(double lat, double lng, double radiusKm);
-    void put(List<T> data);
-}
 ```
 
 ---
@@ -212,13 +227,10 @@ PageLayout.writeRecord(page, value)
 ## 의존성
 
 ```
-SpatialRecordManager → CacheManager
-SpatialRecordManager → SpatialIndex (주입)
-SpatialRecordManager → PageLayout
-RecordManager        → CacheManager
-RecordManager        → PageLayout
-SpatialCacheEngine   → SpatialRecordManager  (searchRadiusCodesByPageId, getAllCodesByPageId)
-SpatialCacheEngine   → SpatialIndex          (toPageId)
+SpatialRecordManager → CacheManager       (버퍼 레이어)
+SpatialRecordManager → SpatialIndex       (주입)
+SpatialRecordManager → SpatialCacheEngine (HIT/MISS 판단 위임, optional)
+SpatialCacheEngine   → SpatialRecordManager 없음 (순환 참조 없음) ✅
 ```
 
 ---
@@ -226,13 +238,13 @@ SpatialCacheEngine   → SpatialIndex          (toPageId)
 ## 제약사항
 
 **구현됨:**
-- put / searchRadius / searchRadiusCodes
-- searchRadiusCodesByPageId / getAllCodesByPageId
+- put / rebuild / search / putCache
+- searchRadius / searchRadiusCodes / searchRadiusCodesByPageId / getAllCodesByPageId
 - Overflow 체인
 - 두 티어 페이지 관리 (PRIMARY / OVERFLOW 분리)
-- SpatialCache\<T\> / PageResult\<T\> 캐시 인터페이스
+- atomic rename 기반 무중단 rebuild
 
 **미구현:**
 - delete
 - update
-- 인덱스 영속화 (재시작 시 재빌드 필요)
+- 인덱스 영속화 (재시작 시 rebuild 필요)
