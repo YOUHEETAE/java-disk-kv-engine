@@ -21,59 +21,81 @@ pageId 단위 공간 캐시 엔진 — Spring 없이 순수 Java 제네릭으로
 
 ## 클래스
 
-### SpatialCache\<T\> (인터페이스, api/)
+### CachePolicy
 
 ```java
-public interface SpatialCache<T> {
-    List<PageResult<T>> search(double lat, double lng, double radiusKm);
-    void put(List<T> data);
-}
+CachePolicy.DEFAULT           // TTL_DISABLE + maxSize 무제한
+CachePolicy.builder()
+    .ttl(Duration.ofDays(7))
+    .maxSize(5000)
+    .build()
 ```
 
-Spring을 포함한 어떤 레이어에서도 이 인터페이스만 의존합니다.
-`T`를 제네릭으로 열어두어 병원, 약국, 편의점 등 어떤 도메인에도 재사용 가능합니다.
+TTL 비활성화(기본): 배치 업데이트 시 rebuild()로 명시적 초기화
+TTL 활성화: Spring @Value로 주입 가능 (`cache.ttl.days=7`)
 
 ---
 
-### PageResult\<T\> (값 객체, api/)
+### CacheEntry\<T\>
 
 ```java
-PageResult.hit(pageId, List<T> cached)   // 캐시 HIT
-PageResult.miss(pageId, List<String> codes) // 캐시 MISS → DB 조회 필요 코드 목록
+List<T> data          // 캐시 데이터
+Instant expiresAt     // null = TTL_DISABLE
+
+isExpired()                      // expiresAt == null → false, 현재시각 > expiresAt → true
+CacheEntry.of(data)              // TTL 없음
+CacheEntry.of(data, expiresAt)   // TTL 있음
 ```
 
-`search()` 결과를 pageId 단위로 HIT/MISS 분리해서 반환합니다.
-호출자(Spring)가 MISS pageId만 추려서 DB를 한 번에 조회할 수 있습니다.
+---
+
+### ~~SpatialCache\<T\> (인터페이스)~~ — Phase 10에서 제거
+
+```
+제거 이유:
+  구현체가 SpatialCacheEngine 하나뿐 → 인터페이스 유지 비용만 증가
+  Spring이 SpatialRecordManager만 알면 되는 구조로 변경
+  → 인터페이스 추상화 불필요
+```
 
 ---
 
 ### SpatialCacheEngine\<T\> (구현체, cache/)
 
 ```java
-public class SpatialCacheEngine<T> implements SpatialCache<T> {
-    private final ConcurrentHashMap<Integer, List<T>> pageCache;
-    private final SpatialRecordManager spatialRecordManager;
-    private final SpatialIndex spatialIndex;
-    private final Function<T, double[]> coordExtractor; // T → [lat, lng]
+// Phase 9: SpatialRecordManager + SpatialIndex + coordExtractor 직접 참조
+// Phase 10: 의존성 제거 → HIT/MISS 판단만 담당
+public class SpatialCacheEngine<T> {
+    private volatile ConcurrentHashMap<Integer, CacheEntry<T>> pageCache;
+    private final CachePolicy policy;
 }
 ```
 
-**search():**
+> `coordExtractor` 제거 이유: SpatialCacheEngine이 SpatialRecordManager를 직접 참조하던
+> 구조에서 역전됨. 좌표 추출 책임이 더 이상 캐시 엔진에 없음.
+
+**getOrMiss(pageId, codes):**
 ```
-spatialRecordManager.searchRadiusCodesByPageId() → Map<pageId, List<code>>
-각 pageId → pageCache 확인
-  HIT → PageResult.hit(pageId, cached)
-  MISS → PageResult.miss(pageId, codes)
+pageCache.get(pageId)
+  → null 또는 isExpired() → PageResult.miss(pageId, codes)
+  → 유효 → PageResult.hit(pageId, cached)
 ```
 
-**put():**
+**put(pageId, List\<T\>):**
 ```
-List<T> → 각 item의 좌표 추출 (coordExtractor)
-→ spatialIndex.toPageId(lat, lng)
-→ pageCache.computeIfAbsent(pageId, ...).add(item)
+CacheEntry.of(data) 또는 CacheEntry.of(data, expiresAt)
+→ pageCache.put(pageId, entry)
+→ maxSize 초과 시 evict
 ```
 
-`coordExtractor`를 생성자 주입으로 받아 도메인 객체의 좌표 추출 방식을 외부에서 결정합니다.
+**clearCache():**
+```
+this.pageCache = new ConcurrentHashMap<>()  ← volatile write (atomic 교체)
+기존 Map → 참조 끊김 → GC 대상
+rebuild() 중 다른 스레드 → volatile read → 기존 Map 계속 읽음 → 중단 없음
+```
+
+`SpatialRecordManager`를 참조하지 않습니다. HIT/MISS 판단만 담당합니다.
 
 ---
 
@@ -82,21 +104,21 @@ List<T> → 각 item의 좌표 추출 (coordExtractor)
 ```
 [Spring SpatialCacheService]
   │
-  ├─ spatialCache.search(lat, lng, radius)
+  ├─ spatialRecordManager.search(lat, lng, radius)
   │     ↓
-  │   [SpatialCacheEngine]
-  │   MiniDB → pageId 목록 → ConcurrentHashMap 확인
-  │     ├─ HIT  → PageResult.hit (데이터 즉시 반환)
+  │   [SpatialRecordManager]
+  │   파일 → pageId + codes 조회
+  │   cacheEngine.getOrMiss(pageId, codes)
+  │     ├─ HIT  → PageResult.hit (JVM 캐시 데이터 즉시 반환)
   │     └─ MISS → PageResult.miss (codes 목록 반환)
   │
-  ├─ MISS codes → spatialRecordManager.getAllCodesByPageId()
-  │             → MariaDB IN 쿼리 한 번 (MISS pageId 전체)
+  ├─ MISS → MariaDB JOIN 조회
   │
-  ├─ spatialCache.put(dbResults)
+  ├─ spatialRecordManager.putCache(pageId, dbResults)
   │     ↓
-  │   coordExtractor → toPageId → pageCache 저장
+  │   cacheEngine.put(pageId, data) → JVM 캐시 저장
   │
-  └─ spatialCache.search() 재호출 → 전부 HIT
+  └─ spatialRecordManager.search() 재호출 → 전부 HIT
         ↓
       MBR 필터링 후 반환
 ```
@@ -137,12 +159,10 @@ pageId 전체 저장 → 반경 밖 데이터 포함 가능
 ## 의존성
 
 ```
-SpatialCacheEngine → SpatialRecordManager  (pageId 목록, 전체 codes 조회)
-SpatialCacheEngine → SpatialIndex          (T → pageId 변환)
-SpatialCacheService → SpatialCache<T>      (인터페이스만 의존, 엔진 모름)
+SpatialRecordManager → SpatialCacheEngine  (단방향)
+SpatialCacheEngine   → SpatialRecordManager 없음 (순환 참조 없음) ✅
+Spring               → SpatialRecordManager만 알면 됨
 ```
-
-Spring은 `SpatialCache<T>` 인터페이스만 알고, `SpatialCacheEngine` 구현체를 직접 참조하지 않습니다.
 
 ---
 
@@ -154,10 +174,9 @@ JVM 프로세스 종료 = 캐시 초기화
 
 동시성 안전:
   ConcurrentHashMap → 읽기 안전
-  put() 시 computeIfAbsent → 같은 pageId 중복 삽입 방지
+  clearCache() volatile write → rebuild 중 기존 캐시 유지
 
 미구현:
-  캐시 크기 제한 (Eviction 정책 없음)
-  TTL (만료 시간 없음)
-  → 병원 데이터는 주 1회 배치 업데이트 → 재빌드 시 JVM 재시작으로 초기화
+  ReadWriteLock 기반 rebuild 완전 동시성 보호
+  Thundering Herd 방지 (동시 MISS → 중복 DB 조회)
 ```
