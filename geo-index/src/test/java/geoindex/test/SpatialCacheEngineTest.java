@@ -23,151 +23,123 @@ class SpatialCacheEngineTest {
     static final String TEST_FILE = "test_cache_engine.db";
     DiskManager diskManager;
     CacheManager cacheManager;
-    SpatialRecordManager spatialRecordManager;
     GeoHashIndex geoHashIndex;
     SpatialCacheEngine<String> engine;
-
-    // coordExtractor: "lat,lng,code" 형식
-    static final java.util.function.Function<String, double[]> COORD = item -> {
-        String[] parts = item.split(",");
-        return new double[]{Double.parseDouble(parts[0]), Double.parseDouble(parts[1])};
-    };
+    SpatialRecordManager spatialRecordManager;
 
     @BeforeEach
     void setup() throws Exception {
         diskManager = new DiskManager(TEST_FILE);
         cacheManager = new CacheManager(diskManager);
         geoHashIndex = new GeoHashIndex();
-        spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex);
-        engine = new SpatialCacheEngine<>(spatialRecordManager, geoHashIndex, COORD);
+        engine = new SpatialCacheEngine<>();
+        spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex, engine);
     }
 
     @AfterEach
     void cleanup() throws Exception {
         cacheManager.close();
         Files.deleteIfExists(Path.of(TEST_FILE));
+        Files.deleteIfExists(Path.of(TEST_FILE + ".new"));
     }
 
+    // -------------------------------------------------------------------------
+    // HIT / MISS 기본
+    // -------------------------------------------------------------------------
+
     @Test
-    void testSearch_첫요청_MISS() {
+    void 첫요청_MISS() {
         spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
+        List<PageResult<String>> results = spatialRecordManager.search(37.4979, 127.0276, 5.0);
 
-        // 첫 요청 → 전부 MISS
         assertTrue(results.stream().anyMatch(r -> !r.isHit()));
         System.out.println("MISS pageId 수: " + results.stream().filter(r -> !r.isHit()).count());
     }
 
     @Test
-    void testSearch_put후_HIT() {
+    void put후_HIT() {
         spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // 첫 요청 → MISS → put
-        List<PageResult<String>> first = engine.search(37.4979, 127.0276, 5.0);
-        List<String> missData = List.of("37.4979,127.0276,B0001");
-        engine.put(missData);
+        // 첫 요청 → MISS
+        List<PageResult<String>> first = spatialRecordManager.search(37.4979, 127.0276, 5.0);
+        assertTrue(first.stream().anyMatch(r -> !r.isHit()));
+
+        // MISS → pageId 단위로 JVM에 저장
+        first.stream().filter(r -> !r.isHit()).forEach(r ->
+                engine.put(r.getPageId(), List.of("B0001"))
+        );
 
         // 두 번째 요청 → HIT
-        List<PageResult<String>> second = engine.search(37.4979, 127.0276, 5.0);
+        List<PageResult<String>> second = spatialRecordManager.search(37.4979, 127.0276, 5.0);
         assertTrue(second.stream().anyMatch(PageResult::isHit));
         System.out.println("HIT pageId 수: " + second.stream().filter(PageResult::isHit).count());
     }
 
     @Test
-    void testPut_pageId별_분류() {
-        // 강남 2개, 역삼 1개 put
-        engine.put(List.of(
-                "37.4979,127.0276,B0001",
-                "37.4985,127.0280,B0002",
-                "37.5100,127.0400,B0003"
-        ));
-
-        System.out.println("캐시된 pageId 수: " + engine.getCacheSize());
-        assertTrue(engine.getCacheSize() >= 1);
-    }
-
-    @Test
-    void testSearch_MISS_codes_포함() {
+    void MISS_codes_포함() {
         spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
         spatialRecordManager.put(37.4985, 127.0280, "B0002".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
+        List<PageResult<String>> results = spatialRecordManager.search(37.4979, 127.0276, 5.0);
 
-        // MISS pageResult는 codes를 가지고 있어야 함
-        results.stream()
-                .filter(r -> !r.isHit())
-                .forEach(r -> {
-                    assertNotNull(r.getCodes());
-                    assertFalse(r.getCodes().isEmpty());
-                    System.out.println("MISS pageId: " + r.getPageId() + " codes: " + r.getCodes());
-                });
+        results.stream().filter(r -> !r.isHit()).forEach(r -> {
+            assertNotNull(r.getCodes());
+            assertFalse(r.getCodes().isEmpty());
+            System.out.println("MISS pageId: " + r.getPageId() + " codes: " + r.getCodes());
+        });
     }
 
-    @Test
-    void testIsCached() {
-        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
-        cacheManager.flush();
-        cacheManager.clearCache();
+    // -------------------------------------------------------------------------
+    // TTL
+    // -------------------------------------------------------------------------
 
-        // put 전 → 캐싱 안됨
-        List<PageResult<String>> first = engine.search(37.4979, 127.0276, 5.0);
-        first.stream()
-                .filter(r -> !r.isHit())
-                .forEach(r -> assertFalse(engine.isCached(r.getPageId())));
-
-        // put 후 → 캐싱됨
-        engine.put(List.of("37.4979,127.0276,B0001"));
-        first.stream()
-                .filter(r -> !r.isHit())
-                .forEach(r -> assertTrue(engine.isCached(r.getPageId())));
-    }
     @Test
-    void TTL_만료후_MISS처리() throws Exception {
-        // TTL 100ms로 엔진 생성
+    void TTL_만료후_MISS() throws Exception {
         CachePolicy shortTtl = CachePolicy.builder()
                 .ttl(Duration.ofMillis(100))
                 .build();
-        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(
-                spatialRecordManager, geoHashIndex, COORD, shortTtl);
+        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(shortTtl);
+        SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, ttlEngine);
 
-        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        srm.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // put → HIT 확인
-        ttlEngine.put(List.of("37.4979,127.0276,B0001"));
-        List<PageResult<String>> before = ttlEngine.search(37.4979, 127.0276, 5.0);
-        assertTrue(before.stream().anyMatch(PageResult::isHit));
+        // put → HIT
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        ttlEngine.put(pageId, List.of("B0001"));
+        assertTrue(ttlEngine.isCached(pageId));
 
         // TTL 만료 대기
         Thread.sleep(150);
 
         // 만료 후 → MISS
-        List<PageResult<String>> after = ttlEngine.search(37.4979, 127.0276, 5.0);
-        assertTrue(after.stream().anyMatch(r -> !r.isHit()),
-                "TTL 만료 후 MISS여야 한다");
+        List<PageResult<String>> after = srm.search(37.4979, 127.0276, 5.0);
+        assertTrue(after.stream().anyMatch(r -> !r.isHit()), "TTL 만료 후 MISS여야 한다");
         System.out.println("TTL 만료 후 MISS 확인 ✅");
     }
 
     @Test
     void TTL_DISABLE_만료없음() throws Exception {
-        // DEFAULT = TTL_DISABLE
-        engine.put(List.of("37.4979,127.0276,B0001"));
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        engine.put(pageId, List.of("B0001"));
 
         Thread.sleep(100);
 
-        // TTL 없으므로 여전히 HIT
-        assertTrue(engine.isCached(
-                geoHashIndex.toPageId(37.4979, 127.0276)));
+        assertTrue(engine.isCached(pageId), "TTL_DISABLE → 만료 없음");
         System.out.println("TTL_DISABLE → 만료 없음 확인 ✅");
     }
+
+    // -------------------------------------------------------------------------
+    // clearCache
+    // -------------------------------------------------------------------------
 
     @Test
     void clearCache_후_전체_MISS() {
@@ -175,81 +147,80 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // 캐시 채우기
-        engine.put(List.of("37.4979,127.0276,B0001"));
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        engine.put(pageId, List.of("B0001"));
         assertTrue(engine.getCacheSize() > 0);
 
-        // clearCache 후
         engine.clearCache();
         assertEquals(0, engine.getCacheSize());
 
-        // 검색하면 전부 MISS
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(results.stream().noneMatch(PageResult::isHit),
-                "clearCache 후 전부 MISS여야 한다");
+        List<PageResult<String>> results = spatialRecordManager.search(37.4979, 127.0276, 5.0);
+        assertTrue(results.stream().noneMatch(PageResult::isHit), "clearCache 후 전부 MISS여야 한다");
         System.out.println("clearCache 후 전체 MISS 확인 ✅");
     }
 
+    // -------------------------------------------------------------------------
+    // rebuild
+    // -------------------------------------------------------------------------
+
     @Test
-    void rebuild_후_새데이터_HIT() {
-        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
-        spatialRecordManager.put(37.4979, 127.0276, "B0002".getBytes());
+    void rebuild_후_파일_새데이터_조회() {
+        // 기존 데이터
+        spatialRecordManager.put(37.4979, 127.0276, "OLD_001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // 기존 데이터 캐시
-        engine.put(List.of("37.4979,127.0276,OLD"));
-        assertEquals(1, engine.getCacheSize());
+        // JVM 캐시에도 올려두기
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        engine.put(pageId, List.of("OLD_001"));
 
-        // rebuild: 새 데이터로 교체
-        engine.rebuild(e -> e.put(List.of(
-                "37.4979,127.0276,B0001",
-                "37.4979,127.0276,B0002"
-        )));
+        // rebuild: 새 데이터로 파일 교체 + JVM 초기화
+        spatialRecordManager.rebuild(srm -> {
+            srm.put(37.4979, 127.0276, "NEW_001".getBytes());
+            srm.put(37.4979, 127.0276, "NEW_002".getBytes());
+        });
 
-        // 새 데이터로 HIT
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(results.stream().anyMatch(PageResult::isHit));
+        // JVM 캐시 비워짐 → MISS
+        List<PageResult<String>> results = spatialRecordManager.search(37.4979, 127.0276, 5.0);
+        assertTrue(results.stream().anyMatch(r -> !r.isHit()), "rebuild 후 JVM 캐시 비워져야 한다");
 
-        // 새 데이터에 B0001, B0002 포함 확인
-        results.stream()
-                .filter(PageResult::isHit)
-                .forEach(r -> {
-                    assertTrue(r.getCached().contains("37.4979,127.0276,B0001")
-                            || r.getCached().contains("37.4979,127.0276,B0002"));
-                });
-        System.out.println("rebuild 후 새 데이터 HIT 확인 ✅");
+        // MISS codes에 새 데이터 포함
+        results.stream().filter(r -> !r.isHit()).forEach(r -> {
+            assertTrue(r.getCodes().contains("NEW_001") || r.getCodes().contains("NEW_002"),
+                    "새 데이터가 파일에 있어야 한다");
+            assertFalse(r.getCodes().contains("OLD_001"), "기존 데이터는 없어야 한다");
+        });
+        System.out.println("rebuild 후 새 데이터 파일 조회 확인 ✅");
     }
+
+    // -------------------------------------------------------------------------
+    // maxSize evict
+    // -------------------------------------------------------------------------
 
     @Test
     void maxSize_초과시_evict() {
-        // maxSize=2로 엔진 생성
-        CachePolicy limitedPolicy = CachePolicy.builder()
-                .maxSize(2)
-                .build();
-        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(
-                spatialRecordManager, geoHashIndex, COORD, limitedPolicy);
+        CachePolicy limitedPolicy = CachePolicy.builder().maxSize(2).build();
+        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(limitedPolicy);
 
-        // 서로 다른 pageId 3개 put
-        limitedEngine.put(List.of(
-                "37.4979,127.0276,A",  // 강남
-                "37.5665,126.9780,B",  // 홍대
-                "37.5133,127.1001,C"   // 잠실
-        ));
+        limitedEngine.put(geoHashIndex.toPageId(37.4979, 127.0276), List.of("A")); // 강남
+        limitedEngine.put(geoHashIndex.toPageId(37.5665, 126.9780), List.of("B")); // 홍대
+        limitedEngine.put(geoHashIndex.toPageId(37.5133, 127.1001), List.of("C")); // 잠실
 
-        // maxSize=2 이하여야 함
         assertTrue(limitedEngine.getCacheSize() <= 2,
                 "maxSize 초과 시 evict되어야 한다. 현재 size: " + limitedEngine.getCacheSize());
-        System.out.println("maxSize 초과 evict 후 size: " + limitedEngine.getCacheSize() + " ✅");
+        System.out.println("maxSize evict 후 size: " + limitedEngine.getCacheSize() + " ✅");
     }
+
+    // -------------------------------------------------------------------------
+    // CachePolicy
+    // -------------------------------------------------------------------------
 
     @Test
     void CachePolicy_DEFAULT_검증() {
         CachePolicy policy = CachePolicy.DEFAULT;
-
         assertFalse(policy.isTtlEnabled(), "DEFAULT는 TTL 비활성화");
         assertFalse(policy.isMaxSizeEnabled(), "DEFAULT는 크기 무제한");
-        System.out.println("CachePolicy: " + policy);
+        System.out.println("CachePolicy DEFAULT 확인 ✅");
     }
 
     @Test
@@ -263,6 +234,6 @@ class SpatialCacheEngineTest {
         assertEquals(Duration.ofDays(7), policy.getTtl());
         assertTrue(policy.isMaxSizeEnabled());
         assertEquals(5000, policy.getMaxSize());
-        System.out.println("CachePolicy: " + policy);
+        System.out.println("CachePolicy 설정값 확인 ✅");
     }
 }

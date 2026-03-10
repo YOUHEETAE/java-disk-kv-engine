@@ -48,4 +48,20 @@ public class CacheManager {
         flush();
         diskManager.close();
     }
+    public void rebuild(CacheManagerLoader loader) {
+        // 임시 CacheManager에 데이터 구축 (기존 파일 살아있음)
+        diskManager.rebuild(tempDm -> {
+            CacheManager tempCm = new CacheManager(tempDm);
+            loader.load(tempCm);
+            tempCm.flush();   // 임시 파일에 기록
+        });
+
+        // rename 완료 후 버퍼 초기화 → 새 파일 기반으로 전환
+        cache.clear();
+    }
+
+    @FunctionalInterface
+    public interface CacheManagerLoader {
+        void load(CacheManager cm);
+    }
 }

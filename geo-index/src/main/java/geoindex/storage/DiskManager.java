@@ -1,6 +1,9 @@
 package geoindex.storage;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -13,13 +16,15 @@ public class DiskManager {
     private static final long DATA_OFFSET =                // 데이터 시작
             MAP_OFFSET + (long) MAX_ENTRIES * ENTRY_SIZE;
 
-    private final RandomAccessFile dbFile;
+    private RandomAccessFile dbFile;
+    private final String filePath;
     private final Map<Integer, Long> pageMap  = new HashMap<>();
     private final Map<Integer, Integer> entryIndex = new HashMap<>(); // pageId → 헤더 내 인덱스
     private int entryCount = 0;
     private long nextDataOffset = DATA_OFFSET;
 
     public DiskManager(String filePath) {
+        this.filePath = filePath;
         try {
             this.dbFile = new RandomAccessFile(filePath, "rw");
             loadPageMap();
@@ -107,4 +112,45 @@ public class DiskManager {
             throw new RuntimeException("close failed", e);
         }
     }
+    public void rebuild(DiskManagerLoader loader) {
+        String tempPath = filePath + ".new";
+        try {
+            // 1. 임시 파일에 새 DiskManager 생성
+            DiskManager tempDm = new DiskManager(tempPath);
+
+            // 2. 임시 파일에 데이터 구축 (기존 파일 살아있음)
+            loader.load(tempDm);
+
+            // 3. 임시 파일 닫기
+            tempDm.close();
+
+            // 4. 기존 파일 닫기
+            dbFile.close();
+
+            // 5. atomic rename
+            Files.move(
+                    Path.of(tempPath),
+                    Path.of(filePath),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+
+            // 6. 새 파일 열기 + 내부 상태 교체
+            dbFile = new RandomAccessFile(filePath, "rw");
+            pageMap.clear();
+            entryIndex.clear();
+            entryCount     = 0;
+            nextDataOffset = DATA_OFFSET;
+            loadPageMap();
+
+        } catch (IOException e) {
+            throw new RuntimeException("DiskManager rebuild failed", e);
+        }
+    }
+
+    @FunctionalInterface
+    public interface DiskManagerLoader {
+        void load(DiskManager dm);
+    }
+
 }
