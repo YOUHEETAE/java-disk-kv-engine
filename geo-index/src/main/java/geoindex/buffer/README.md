@@ -15,10 +15,12 @@ API 계층과 디스크 사이의 페이지 캐시 관리
 
 **주요 메서드:**
 ```java
-Page getPage(int pageId)     // 캐시 또는 디스크에서 가져오기
-void putPage(Page page)      // Dirty 마킹, 디스크에 즉시 쓰지 않음
-void flush()                 // 모든 dirty 페이지 디스크에 쓰기
-void close()                 // 플러시 후 디스크 닫기
+Page getPage(int pageId)                       // 캐시 또는 디스크에서 가져오기
+void putPage(Page page)                        // Dirty 마킹, 디스크에 즉시 쓰지 않음
+void flush()                                   // 모든 dirty 페이지 디스크에 쓰기
+void rebuild(CacheManagerLoader loader)        // 임시 CacheManager 구축 → atomic rename → 버퍼 초기화
+void clearCache()                              // 버퍼 초기화 (캐시만, 디스크 변경 없음)
+void close()                                   // 플러시 후 디스크 닫기
 ```
 
 **캐시 전략:**
@@ -52,6 +54,23 @@ flush:
 - 수동 플러시 (flush() 또는 close() 호출)
 - 크기 제한 없음 (무제한 캐시)
 - Eviction 정책 없음
+
+### rebuild() — 임시 CacheManager로 구축 후 교체
+
+```
+왜 필요한가:
+  기존 버퍼를 먼저 비우면 구축 중 요청이 빈 상태로 서비스됨 ❌
+  → 임시 CacheManager에 완전히 구축 후 atomic rename → 버퍼 초기화
+
+흐름:
+  1. diskManager.rebuild(tempDm → {
+       임시 CacheManager(tempDm) 생성
+       loader로 임시 파일에 데이터 구축
+       tempCm.flush() → 임시 파일 기록
+     })
+  2. atomic rename 완료 (기존 파일 교체됨)
+  3. cache.clear() → 버퍼 초기화 → 새 파일 기반으로 전환
+```
 
 ## 성능 영향
 
