@@ -143,6 +143,32 @@ DiskManager 생성 시 loadPageMap() 호출
 
 ---
 
+## rebuild() — atomic rename 기반 파일 교체
+
+### 왜 필요한가?
+
+```
+단순 삭제 + 재생성:
+  파일 삭제 → 재구축 중 readPage() 요청 → 깨진 파일 읽음 ❌
+
+atomic rename:
+  임시 파일(.new)에 완전히 구축 → rename으로 교체
+  rename 전까지 기존 파일 살아있음 → 요청 중단 없음 ✅
+```
+
+### 흐름
+
+```
+1. 임시 DiskManager(filePath + ".new") 생성
+2. loader로 임시 파일에 데이터 구축
+3. 임시 파일 닫기
+4. 기존 파일 닫기
+5. Files.move(ATOMIC_MOVE + REPLACE_EXISTING)
+6. 새 파일 열기 + 내부 상태(pageMap, entryIndex) 교체
+```
+
+---
+
 ## 트레이드오프
 
 | 항목 | 순차 저장 (이전) | sparse 매핑 (현재) |
@@ -161,9 +187,10 @@ Morton 직접 pageId를 사용하려면 sparse 매핑이 필수입니다.
 ## 주요 메서드
 
 ```java
-Page readPage(int pageId)    // pageMap 조회 → 디스크 읽기
-void writePage(Page page)    // 신규/기존 분기 → 디스크 쓰기
-void close()                 // 파일 핸들 닫기
+Page readPage(int pageId)                    // pageMap 조회 → 디스크 읽기
+void writePage(Page page)                    // 신규/기존 분기 → 디스크 쓰기
+void rebuild(DiskManagerLoader loader)       // atomic rename 기반 파일 재구축
+void close()                                 // 파일 핸들 닫기
 ```
 
 ---
@@ -174,7 +201,6 @@ void close()                 // 파일 핸들 닫기
 // pageId가 60,712,140이어도 파일은 10MB 이하여야 함
 int[] pageIds = {60_712_140, 60_712_141, 60_712_200};
 
-// 각 페이지 저장 후
 long fileSize = Files.size(Path.of(TEST_FILE));
 assertTrue(fileSize < 10 * 1024 * 1024);
 
