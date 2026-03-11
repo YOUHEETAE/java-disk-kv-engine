@@ -318,8 +318,6 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
     - SpatialCacheEngine 최상단 API 승격 (api/ 레이어)
     - SpatialRecordManager 파일 I/O 전담으로 책임 분리
     - atomic rename 기반 무중단 rebuild
-⬜ Phase 11: 장애복구 / 영속성 / 동시성 제어
-```
 
 ---
 
