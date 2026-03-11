@@ -72,9 +72,15 @@ pageCache.get(pageId)
 
 **put(pageId, List\<T\>):**
 ```
-CacheEntry.of(data) 또는 CacheEntry.of(data, expiresAt)
-→ pageCache.put(pageId, entry)
-→ maxSize 초과 시 evictOne()
+pageCache.put(pageId, CacheEntry.of(data))
+  → ConcurrentHashMap.put() → atomic 덮어쓰기
+  → maxSize 초과 시 evictOne()
+
+덮어쓰기를 선택한 이유:
+  같은 pageId = 같은 DB 조회 = 같은 데이터
+  Thundering Herd 시 동일 pageId 동시 put
+  → addAll이면 중복 데이터 쌓임 ❌
+  → 덮어쓰기면 결과 동일, 중복 없음 ✅
 ```
 
 **clearCache():**
@@ -117,7 +123,7 @@ PageCacheStore → SpatialRecordManager 없음 (순환 참조 없음) ✅
       MISS → MariaDB JOIN 조회
       spatialCacheEngine.putCache(pageId, dbResults)
         ↓
-      pageCacheStore.put(pageId, data) → JVM 캐시 저장
+      pageCacheStore.put(pageId, data) → JVM 캐시 저장 (덮어쓰기)
 ```
 
 ---
@@ -143,12 +149,13 @@ pageId 전체 저장 → 반경 밖 데이터 포함 가능
 → 스토어는 저장/조회만 담당
 ```
 
-### ConcurrentHashMap
+### ConcurrentHashMap + 덮어쓰기
 
 ```
 멀티스레드 환경 (Spring 요청 동시 처리)
-→ HashMap 대신 ConcurrentHashMap
-→ 락 없이 읽기, 세그먼트 락으로 쓰기
+→ ConcurrentHashMap.put() → 세그먼트 락으로 atomic 덮어쓰기 보장
+→ 읽기는 락 없이 동시 실행 가능
+→ Thundering Herd 시 중복 데이터 쌓임 방지
 ```
 
 ---
@@ -160,10 +167,11 @@ JVM 프로세스 종료 = 캐시 초기화
   → 재시작 시 Warm-up 필요 (Lazy 방식으로 자연스럽게 채워짐)
 
 동시성 안전:
-  ConcurrentHashMap → 읽기 안전
+  ConcurrentHashMap → put/get 동시 실행 안전
   clearCache() volatile write → rebuild 중 기존 캐시 유지
 
 미구현:
-  ReadWriteLock 기반 rebuild 완전 동시성 보호
-  Thundering Herd 방지 (동시 MISS → 중복 DB 조회)
+  Thundering Herd 완전 방지 (동시 MISS → 중복 DB 조회 허용)
+  → 같은 데이터 덮어쓰기로 정합성은 보장
+  → computeIfAbsent + Future 조합으로 개선 가능하나 복잡도 대비 효과 낮음
 ```
