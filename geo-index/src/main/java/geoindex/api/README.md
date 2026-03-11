@@ -4,46 +4,54 @@
 
 ---
 
+## 레이어 구조
+
+```
+Spring
+  └─ SpatialCacheEngine       ← 최상단 (조율)
+       ├─ SpatialRecordManager ← 파일 I/O 전담
+       └─ PageCacheStore       ← 캐시 인프라 (cache/ 레이어)
+```
+
+Spring은 `SpatialCacheEngine` 하나만 의존합니다.
+파일이냐 캐시냐는 엔진 내부 문제입니다.
+
+---
+
 ## 클래스
 
-### SpatialRecordManager.java
+### SpatialCacheEngine\<T\>
 
-공간 인덱스를 통해 좌표 기반으로 레코드를 저장하고 반경 검색을 수행합니다.
+최상단 API. 파일 I/O(SpatialRecordManager)와 캐시(PageCacheStore)를 조율합니다.
 
-**API:**
 ```java
-void put(double lat, double lng, byte[] value)
-void rebuild(Consumer<SpatialRecordManager> loader)
-
 List<PageResult<T>> search(double lat, double lng, double radiusKm)
 void putCache(int pageId, List<T> data)
-
-List<byte[]> searchRadius(double lat, double lng, double radiusKm)
-List<String> searchRadiusCodes(double lat, double lng, double radiusKm)
-
-Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm)
-List<String> getAllCodesByPageId(int pageId)
+void rebuild(Consumer<SpatialRecordManager> loader)
+void clearCache()
+long getCacheSize()
+boolean isCached(int pageId)
+CachePolicy getPolicy()
 ```
 
-| 메서드 | 반환 | 용도 |
-|--------|------|------|
-| `put` | void | 파일에 병원 코드 저장 |
-| `rebuild` | void | 파일 재구축 + JVM 캐시 초기화 |
-| `search` | `List<PageResult<T>>` | HIT/MISS 판단 후 반환 |
-| `putCache` | void | MISS 후 DB 결과 JVM 캐시 저장 |
-| `searchRadius` | `List<byte[]>` | 더미 데이터 벤치마크 |
-| `searchRadiusCodes` | `List<String>` | 병원 코드 목록 |
-| `searchRadiusCodesByPageId` | `Map<pageId, List<String>>` | 캐시 HIT/MISS 분기 |
-| `getAllCodesByPageId` | `List<String>` | MISS pageId 전체 codes 조회 |
+| 메서드 | 역할 |
+|--------|------|
+| `search` | pageId 조회 → HIT/MISS 판단 → PageResult 반환 |
+| `putCache` | MISS 후 DB 결과를 JVM 캐시에 저장 |
+| `rebuild` | 파일 재구축 + JVM 캐시 초기화 |
+| `clearCache` | JVM 캐시 전체 초기화 |
 
-**`search()`가 필요한 이유:**
+**생성자:**
+```java
+new SpatialCacheEngine<>(srm)                  // CachePolicy.DEFAULT
+new SpatialCacheEngine<>(srm, cachePolicy)     // 커스텀 정책
 ```
-기존 방식: SpatialCacheEngine이 SpatialRecordManager를 직접 참조
-  → 순환 참조 위험, Spring이 두 빈을 모두 알아야 함
 
-현재 방식: SpatialRecordManager.search()가 cacheEngine.getOrMiss() 위임
-  → 단방향 의존성 (SpatialCacheEngine → SpatialRecordManager 없음)
-  → Spring은 SpatialRecordManager만 알면 됨
+**의존성:**
+```
+SpatialCacheEngine → SpatialRecordManager  (파일 I/O 위임)
+SpatialCacheEngine → PageCacheStore        (캐시 위임)
+SpatialRecordManager → SpatialCacheEngine 없음 (순환 참조 없음) ✅
 ```
 
 **`rebuild()`가 필요한 이유:**
@@ -52,19 +60,51 @@ List<String> getAllCodesByPageId(int pageId)
   파일 교체 중 요청 → 빈 파일 읽음 ❌
 
 rebuild() + atomic rename:
-  임시 파일에 구축 → rename 전까지 기존 파일 서비스 → JVM 캐시 초기화
+  임시 파일에 구축 → rename 전까지 기존 파일 서비스
+  rename 완료 → JVM 캐시 초기화
   요청 중단 없음 ✅
 ```
 
+Spring 사용 예:
+```java
+spatialCacheEngine.rebuild(srm ->
+    hospitalRepo.findAllCodes().forEach(h ->
+        srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
+    )
+);
+```
+
+---
+
+### SpatialRecordManager
+
+파일 I/O 전담. 캐시 관련 책임 없음.
+
+```java
+void put(double lat, double lng, byte[] value)
+void rebuild(Consumer<SpatialRecordManager> loader)
+
+Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm)
+List<String> getAllCodesByPageId(int pageId)
+
+List<byte[]> searchRadius(double lat, double lng, double radiusKm)   // 벤치마크용
+List<String> searchRadiusCodes(double lat, double lng, double radiusKm) // 벤치마크용
+```
+
+| 메서드 | 반환 | 용도 |
+|--------|------|------|
+| `put` | void | 파일에 병원 코드 저장 |
+| `rebuild` | void | 임시 파일 구축 → atomic rename |
+| `searchRadiusCodesByPageId` | `Map<pageId, List<String>>` | pageId 단위 codes 반환 |
+| `getAllCodesByPageId` | `List<String>` | pageId 전체 codes 반환 (MISS 시 DB 조회용) |
+
 **`searchRadiusCodesByPageId`가 필요한 이유:**
 ```
-기존 searchRadiusCodes():
-  pageId 구분 없이 codes 전체 반환
-  → 어떤 pageId가 HIT인지 MISS인지 알 수 없음
+codes만 반환하면:
+  어떤 pageId가 HIT인지 MISS인지 알 수 없음
 
-searchRadiusCodesByPageId():
-  Map<pageId, List<codes>> 반환
-  → SpatialCacheEngine이 pageId 단위로 HIT/MISS 분기 가능
+Map<pageId, List<codes>> 반환:
+  SpatialCacheEngine이 pageId 단위로 HIT/MISS 분기 가능
 ```
 
 **`getAllCodesByPageId`가 필요한 이유:**
@@ -74,6 +114,28 @@ MISS 시 반경 내 codes만 DB 조회 후 캐시 저장하면:
 
 → pageId 전체 codes를 DB 조회 후 저장
 → overflow 체인까지 순회해서 해당 페이지의 모든 records 반환
+```
+
+**의존성:**
+```
+SpatialRecordManager → CacheManager  (버퍼 레이어)
+SpatialRecordManager → SpatialIndex  (pageId 변환, 주입)
+캐시 관련 의존성 없음 ✅
+```
+
+**핵심 설계: 두 티어 페이지 관리**
+```java
+private static final int PRIMARY_PAGES  = 32_768;  // Morton pageId 전용
+private static final int OVERFLOW_PAGES = 40_960;  // overflow 전용 free list
+
+PRIMARY_PAGES (0 ~ 32,767):
+  Morton 코드 기반 pageId 사용
+  공간 클러스터링 담당
+
+OVERFLOW_PAGES (32,768 ~ 73,727):
+  별도 Deque<Integer> free list로 관리
+  Morton 기반 할당 절대 금지
+  핫스팟 지역의 초과 레코드 수용
 ```
 
 ---
@@ -94,9 +156,9 @@ result.getCodes()    // MISS 시 hospital_code 목록
 
 ---
 
-### RecordManager.java
+### RecordManager
 
-Key-Value 기반 저장소입니다. O(1) 직접 접근을 위한 인메모리 인덱스를 사용합니다.
+Key-Value 기반 저장소. O(1) 직접 접근을 위한 인메모리 인덱스를 사용합니다.
 
 ```java
 void put(String key, byte[] value)
@@ -105,9 +167,9 @@ byte[] get(String key)
 
 ---
 
-### RecordId.java
+### RecordId (값 객체)
 
-레코드의 물리적 위치를 나타내는 값 객체입니다.
+레코드의 물리적 위치를 나타냅니다.
 
 ```java
 class RecordId {
@@ -116,86 +178,8 @@ class RecordId {
 }
 ```
 
-`equals` / `hashCode` 구현 → HashMap 키로 사용 가능 → O(n) 슬롯 스캔에서 O(1) 직접 접근으로 개선
-
----
-
-## 핵심 설계: 두 티어 페이지 관리
-
-### 문제: 단일 페이지 풀의 한계
-
-초기 구현에서는 PRIMARY 페이지와 OVERFLOW 페이지가 같은 풀을 공유했습니다.
-
-```
-문제:
-  서울 강남처럼 병원 밀집 지역 → 특정 pageId에 레코드 집중
-  → overflow 발생 → 전체 풀에서 새 페이지 할당
-  → 할당된 overflow 페이지가 Morton 기반 pageId와 충돌
-  → "no available pages" 오류 또는 무한 재귀
-```
-
-### 해결: PRIMARY / OVERFLOW 분리
-
-```java
-private static final int PRIMARY_PAGES  = 32_768;  // Morton pageId 전용
-private static final int OVERFLOW_PAGES = 40_960;  // overflow 전용 free list
-private static final int TOTAL_PAGES    = PRIMARY_PAGES + OVERFLOW_PAGES;
-```
-
-```
-PRIMARY_PAGES (0 ~ 32,767):
-  Morton 코드 기반 pageId 사용
-  공간 클러스터링 담당
-
-OVERFLOW_PAGES (32,768 ~ 73,727):
-  별도 Deque<Integer> free list로 관리
-  Morton 기반 할당 절대 금지
-  핫스팟 지역의 초과 레코드 수용
-```
-
-**overflow 할당 원칙:**
-```
-overflow 페이지는 절대 Morton 기반으로 할당하지 않는다
-→ Morton 공간과 분리해야 공간 클러스터링 속성이 보존됨
-→ free list에서만 꺼내 사용
-```
-
----
-
-## 연산
-
-### put(lat, lng, value)
-
-```
-1. spatialIndex.toPageId(lat, lng)  → Morton 기반 pageId
-2. cacheManager.getPage(pageId)     → 페이지 로드
-3. PageLayout.isInitialized()?      → 미초기화 시 initializePage()
-4. writeWithOverflow(page, value)   → 슬롯에 기록
-5. cacheManager.putPage(page)       → dirty 마킹
-```
-
-### writeWithOverflow(page, value)
-
-```
-PageLayout.writeRecord(page, value)
-  └─ 성공 (slotId >= 0): 완료
-  └─ 실패 (slotId == -1, 공간 부족):
-       getOverflowPageId(page)
-         └─ NO_OVERFLOW: overflowFreeList.pop() → setOverflowPageId()
-         └─ 기존 overflow 있음: 해당 페이지로 이동
-       writeWithOverflow(overflowPage, value)  ← 재귀
-```
-
-### getAllCodesByPageId(pageId)
-
-```
-1. cacheManager.getPage(pageId)       → 기본 페이지 로드
-2. PageLayout.readAllRecords(page)    → 레코드 수집
-3. overflow 체인 순회
-   while overflowPageId != NO_OVERFLOW:
-     overflowPage → readAllRecords → 수집
-4. 전체 codes 반환
-```
+`equals` / `hashCode` 구현 → HashMap 키로 사용 가능
+→ O(n) 슬롯 스캔에서 O(1) 직접 접근으로 개선
 
 ---
 
@@ -224,23 +208,12 @@ PageLayout.writeRecord(page, value)
 
 ---
 
-## 의존성
-
-```
-SpatialRecordManager → CacheManager       (버퍼 레이어)
-SpatialRecordManager → SpatialIndex       (주입)
-SpatialRecordManager → SpatialCacheEngine (HIT/MISS 판단 위임, optional)
-SpatialCacheEngine   → SpatialRecordManager 없음 (순환 참조 없음) ✅
-```
-
----
-
 ## 제약사항
 
 **구현됨:**
-- put / rebuild / search / putCache
-- searchRadius / searchRadiusCodes / searchRadiusCodesByPageId / getAllCodesByPageId
-- Overflow 체인
+- put / rebuild / search / putCache / clearCache
+- searchRadiusCodesByPageId / getAllCodesByPageId
+- overflow 체인 (readAllCodesFromChain)
 - 두 티어 페이지 관리 (PRIMARY / OVERFLOW 분리)
 - atomic rename 기반 무중단 rebuild
 
@@ -248,3 +221,5 @@ SpatialCacheEngine   → SpatialRecordManager 없음 (순환 참조 없음) ✅
 - delete
 - update
 - 인덱스 영속화 (재시작 시 rebuild 필요)
+- 동시성 제어 (ReadWriteLock)
+- 체크섬 기반 파일 손상 감지
