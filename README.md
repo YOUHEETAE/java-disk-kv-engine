@@ -39,10 +39,10 @@ flowchart TD
     end
 
     subgraph Engine["geo-index Engine (순수 Java)"]
-        SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
-        SCE["SpatialCacheEngine<T>\ngetOrMiss / put / clearCache"]
+        SCE["SpatialCacheEngine\nsearch / putCache / rebuild"]
+        SRM["SpatialRecordManager\nput / searchRadiusCodesByPageId"]
+        PCS["PageCacheStore\nConcurrentHashMap / TTL / evict"]
         IDX["GeoHashIndex\nMorton 코드 → pageId"]
-        CHM["ConcurrentHashMap\nMap<pageId, CacheEntry<T>>"]
 
         subgraph Storage["Storage Layer"]
             CM["CacheManager\nWrite-Back + rebuild"]
@@ -50,8 +50,8 @@ flowchart TD
             PG["Page 4KB"]
         end
 
-        SRM --> SCE
-        SCE --> CHM
+        SCE --> SRM
+        SCE --> PCS
         SRM --> IDX
         SRM --> CM
         CM --> DM
@@ -60,10 +60,10 @@ flowchart TD
 
     DB[("MariaDB")]
 
-    SCS --> SRM
-    CHM -->|HIT| RES([즉시 반환])
-    CHM -->|MISS| DB
-    DB -->|putCache| CHM
+    SCS --> SCE
+    PCS -->|HIT| RES([즉시 반환])
+    PCS -->|MISS| DB
+    DB -->|putCache| PCS
     DB --> RES
 ```
 
@@ -108,43 +108,55 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 → 5개 disjoint interval, pageId 12개만 I/O
 ```
 
+→ 설계 개선 상세 기록: [HILBERT_IMPLEMENTATION.md](./geo-index/src/main/java/geoindex/index/HILBERT_IMPLEMENTATION.md)
+
 ### JVM 캐시 + rebuild()
 
 ```
-첫 요청:
-  MiniDB → pageId 목록 반환 (0ms)
-  pageId별 캐시 확인 → MISS
-  MariaDB → 전체 데이터 조회
-  결과 → putCache() → JVM 캐시 저장
+실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
+Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
 
-두 번째 요청 (같은 반경):
-  MiniDB → pageId 목록 반환 (0ms)
-  pageId별 캐시 확인 → HIT
-  MariaDB 왕복 없음 → 즉시 반환
+하지만 Spatial Index가 제공하는 pageId는
+"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
+
+pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
+→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
 ```
 
 배치 업데이트 시:
-```
-spatialRecordManager.rebuild(srm ->
+```java
+spatialCacheEngine.rebuild(srm ->
     hospitalRepo.findAllCodes().forEach(h ->
         srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
     )
 );
-→ atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
-→ 요청 중단 없음
+// atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
+// 요청 중단 없음
 ```
 
 ---
 
 ## 성능 결과
 
-### 더미 데이터 벤치마크 (1,000회 평균)
+### 더미 데이터 벤치마크 (규모별 성능 추세)
 
-> 측정 조건: JVM Warm-up 후 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화
+> 측정 조건: 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화
 
 <div align=center>
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
 </div>
+
+| 건수 | Full Scan | GeoHash | Hilbert |
+|------|----------|---------|---------|
+| 10,000 | 100ms | < 1ms | 29ms |
+| 20,000 | 133ms | < 1ms | 33ms |
+| 30,000 | 259ms | 2ms | 32ms |
+| 50,000 | 292ms | < 1ms | 33ms |
+| 79,081 | 434ms | < 1ms | 33ms |
+| 100,000 | 528ms | < 1ms | 47ms |
+| 200,000 | 660ms | 3ms | 24ms |
+| 500,000 | 768ms | < 1ms | 24ms |
+| 1,000,000 | 1,177ms | 6ms | 34ms |
 
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
 - **GeoHash**: 공간 밀도에 의존 O(P) → 대규모 데이터에서도 일정한 검색 성능 유지
@@ -178,6 +190,12 @@ IN (1,366건) 쿼리 오버헤드 ≈ BETWEEN 범위 스캔 비용
 
 **시나리오별 해석:**
 
+| 시나리오 | 개선율 | HIT율 | 특징 |
+|----------|--------|-------|------|
+| Random | 1.2x | 5.8% | Worst Case (캐시 재사용 없음) |
+| **Mixed** | **24.6x** | **95.9%** | **현실적 서비스 트래픽** |
+| Hotspot | 46.8x | 98.6% | Best Case (인기 지역 순환) |
+
 ```
 Random (Worst Case):    완전 랜덤 좌표 = 캐시 재사용 불가 → HIT  5.8% →  1.2x
 Mixed  (현실적 서비스):  70% 핫스팟     → HIT 95.9%        → 24.6x
@@ -195,7 +213,7 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
   ↓
 [MiniDB] pageId 목록 계산 (0ms)
   ↓
-[SpatialCacheService] pageId 캐시 확인
+[SpatialCacheEngine] pageId 캐시 확인
   ├─ HIT → 즉시 반환 (MariaDB 왕복 없음)
   └─ MISS → [MariaDB] WHERE hospital_code IN (...) + JOIN
               → 결과를 pageId 단위로 캐시 저장
@@ -211,23 +229,6 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 
 ---
 
-## 핵심 인사이트
-
-```
-Spatial Index 자체는 DB 쿼리 성능을 크게 개선하지 않을 수 있다.
-
-실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
-Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
-
-하지만 Spatial Index가 제공하는 pageId는
-"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
-
-pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
-→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
-```
-
----
-
 ## 모듈 구조
 
 ```
@@ -239,13 +240,15 @@ geo-index/
   buffer/
     CacheManager.java       Write-Back 캐싱 + rebuild
   api/
+    SpatialCacheEngine.java     최상단 API (search / putCache / rebuild / clearCache)
+    SpatialRecordManager.java   파일 I/O 전담 (put / searchRadiusCodesByPageId / rebuild)
     RecordManager.java          Key-Value 저장
-    SpatialRecordManager.java   최상단 API (search / put / putCache / rebuild)
     PageResult.java             캐시 조회 결과 값 객체
+    RecordId.java               O(1) 직접 접근 값 객체
   cache/
-    SpatialCacheEngine.java     JVM 캐시 (getOrMiss / put / clearCache)
-    CachePolicy.java            TTL / maxSize 정책
-    CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
+    PageCacheStore.java     JVM 캐시 인프라 (ConcurrentHashMap / TTL / evict)
+    CachePolicy.java        TTL / maxSize 정책
+    CacheEntry.java         캐시 값 래퍼 (데이터 + 만료시각)
   index/
     SpatialIndex.java       인터페이스
     GeoHash.java            Morton 코드 인코딩/디코딩
@@ -276,29 +279,46 @@ geo-index/
 
 ---
 
+## 핵심 인사이트
+
+```
+Spatial Index 자체는 DB 쿼리 성능을 크게 개선하지 않을 수 있다.
+
+실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
+Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
+
+하지만 Spatial Index가 제공하는 pageId는
+"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
+
+pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
+→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
+```
+
+---
+
 ## 로드맵
 
 ```
-✅ Phase 1: Storage (Page, DiskManager, CacheManager)
-✅ Phase 2: API (RecordManager, PageLayout)
-✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
-✅ Phase 4: Benchmark (Full Scan vs GeoHash vs Hilbert)
-✅ Phase 5: Hilbert Multi-Interval Query + Seek Count 비교
-✅ Phase 6: DiskManager sparse 매핑 테이블
-✅ Phase 7: Morton 코드 직접 pageId 매핑 (pageId 분산 187개)
-✅ Phase 8: 실제 병원 데이터 연동 + A/B 벤치마크 (50회 평균)
-✅ Phase 9: SpatialCacheService (JVM 캐시) + 3종 시나리오 벤치마크
+✅ Phase 1:  Storage (Page, DiskManager, CacheManager)
+✅ Phase 2:  API (RecordManager, PageLayout)
+✅ Phase 3:  GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
+✅ Phase 4:  Benchmark (Full Scan vs GeoHash vs Hilbert)
+✅ Phase 5:  Hilbert Multi-Interval Query + Seek Count 비교
+✅ Phase 6:  DiskManager sparse 매핑 테이블
+✅ Phase 7:  Morton 코드 직접 pageId 매핑 (pageId 분산 187개)
+✅ Phase 8:  실제 병원 데이터 연동 + A/B 벤치마크 (50회 평균)
+✅ Phase 9:  SpatialCacheService (JVM 캐시) + 3종 시나리오 벤치마크
     - Map<pageId, List<HospitalData>> Lazy 캐시
     - pageId 전체 저장 + MBR 필터링으로 누락/초과 방지
     - Random / Mixed / Hotspot 100회 시나리오 측정
     - Mixed 24.6x / Hotspot 46.8x 개선 확인
 ✅ Phase 10: 캐시 운영 고도화
     - CachePolicy (TTL / maxSize), CacheEntry (만료시각 래퍼)
-    - SpatialCacheEngine 리팩토링 (SpatialRecordManager 의존성 제거)
-    - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
+    - PageCacheStore 분리 (캐시 인프라 cache/ 레이어로 분리)
+    - SpatialCacheEngine 최상단 API 승격 (api/ 레이어)
+    - SpatialRecordManager 파일 I/O 전담으로 책임 분리
     - atomic rename 기반 무중단 rebuild
-    - SpatialCache<T> 인터페이스 제거 (단순화)
-⬜ Phase 11: 체크섬 기반 파일 손상 감지 + 자동 재빌드
+⬜ Phase 11: 장애복구 / 영속성 / 동시성 제어
 ```
 
 ---
