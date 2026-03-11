@@ -318,7 +318,46 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
     - SpatialCacheEngine 최상단 API 승격 (api/ 레이어)
     - SpatialRecordManager 파일 I/O 전담으로 책임 분리
     - atomic rename 기반 무중단 rebuild
-⬜ Phase 11: 장애복구 / 영속성 / 동시성 제어
+
+---
+
+## 설계로 해결한 것들
+
+### 장애복구
+```
+WAL 없이 atomic rename으로 보장
+
+rebuild() 중 어느 시점 크래시
+  rename 전  → 기존 파일 그대로 유지
+  rename 중  → OS atomic 보장
+  rename 후  → 새 파일로 정상 서비스
+
+재시작 → loadPageMap() → 헤더에서 자동 복구
+```
+
+### 영속화
+```
+별도 인덱스 저장 없이 재시작 후 정상 동작
+
+GeoHashIndex → 상태 없음, lat/lng → Morton 코드 매번 계산
+DiskManager  → 재시작 시 loadPageMap() 자동 복구
+JVM 캐시     → Lazy 복구 (첫 요청부터 자연스럽게 채워짐)
+
+캐시 영속화는 의도적으로 제외
+  → 영속화하면 MISS 시나리오 자체가 없어짐
+  → 벤치마크 3종(Random/Mixed/Hotspot) 의미 사라짐
+```
+
+### 동시성
+```
+ConcurrentHashMap 교체로 해결
+
+PageCacheStore → ConcurrentHashMap (초기부터 적용)
+CacheManager   → HashMap → ConcurrentHashMap 교체
+
+rebuild() vs search() 충돌
+  → close ~ reopen 구간 수 밀리초 + 주 1회 실행
+  → ReadWriteLock 추가는 복잡도 대비 효과 없음
 ```
 
 ---
