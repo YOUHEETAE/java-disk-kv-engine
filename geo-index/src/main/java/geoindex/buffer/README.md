@@ -2,6 +2,8 @@
 
 Write-Back 전략을 사용하는 메모리 내 페이지 캐싱 계층
 
+---
+
 ## 클래스
 
 ### CacheManager.java
@@ -40,6 +42,8 @@ flush:
     Dirty 플래그 제거
 ```
 
+---
+
 ## 핵심 개념
 
 ### Write-Back vs Write-Through
@@ -54,6 +58,20 @@ flush:
 - 수동 플러시 (flush() 또는 close() 호출)
 - 크기 제한 없음 (무제한 캐시)
 - Eviction 정책 없음
+
+### ConcurrentHashMap — 동시성 보장
+
+```
+Spring 멀티스레드 환경에서 rebuild() 후 다수 요청 동시 유입
+→ 전부 MISS → 동시에 cache.put() 호출
+
+HashMap:
+  동시 put → 내부 구조 깨짐 (무한루프 / NPE) ❌
+
+ConcurrentHashMap:
+  세그먼트 락으로 동시 put 안전 보장 ✅
+  읽기는 락 없이 동시 실행 ✅
+```
 
 ### rebuild() — 임시 CacheManager로 구축 후 교체
 
@@ -72,6 +90,8 @@ flush:
   3. cache.clear() → 버퍼 초기화 → 새 파일 기반으로 전환
 ```
 
+---
+
 ## 성능 영향
 
 ### Write-Through (이전)
@@ -86,6 +106,8 @@ flush:
 총: 100ms
 ```
 
+---
+
 ## 향후 개선
 
 ### Buffer Pool (계획)
@@ -93,16 +115,18 @@ flush:
 - LRU eviction 정책
 - Dirty 페이지 eviction 시 디스크 쓰기
 
-**예시:**
 ```java
 // 미래 API
 CacheManager cache = new CacheManager(diskManager, 100); // 최대 100 페이지
-
 cache.getPage(1000); // 캐시 가득 차면 LRU 페이지 evict
 ```
 
+---
+
 ## 의존성
 
-- geoindex.storage.DiskManager - 디스크 연산
-- geoindex.storage.Page - 페이지 객체
-- java.util.HashMap - 캐시 저장소
+```
+CacheManager → DiskManager  (디스크 연산)
+CacheManager → Page         (페이지 객체)
+java.util.concurrent.ConcurrentHashMap (캐시 저장소)
+```
