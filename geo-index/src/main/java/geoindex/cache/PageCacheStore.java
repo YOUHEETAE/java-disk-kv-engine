@@ -47,16 +47,11 @@ public class PageCacheStore<T> {
             evictOne();
         }
 
-        pageCache.compute(pageId, (k, existing) -> {
-            List<T> list = (existing != null && !existing.isExpired())
-                    ? new ArrayList<>(existing.getData())
-                    : new ArrayList<>();
-            list.addAll(data);
-
-            return policy.isTtlEnabled()
-                    ? CacheEntry.of(list, Instant.now().plus(policy.getTtl()))
-                    : CacheEntry.of(list);
-        });
+        pageCache.put(pageId,
+                policy.isTtlEnabled()
+                        ? CacheEntry.of(data, Instant.now().plus(policy.getTtl()))
+                        : CacheEntry.of(data)
+        );
     }
 
     // -------------------------------------------------------------------------

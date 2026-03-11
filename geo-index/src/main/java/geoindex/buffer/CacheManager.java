@@ -4,13 +4,14 @@ import geoindex.storage.DiskManager;
 import geoindex.storage.Page;
 
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheManager {
-    private final HashMap<Integer, Page> cache;
+    private final ConcurrentHashMap<Integer, Page> cache;
     private final DiskManager diskManager;
     public CacheManager(DiskManager diskManager) {
         this.diskManager = diskManager;
-        this.cache = new HashMap<>();
+        this.cache = new ConcurrentHashMap<>();
     }
 
     public Page getPage(int pageId) {
