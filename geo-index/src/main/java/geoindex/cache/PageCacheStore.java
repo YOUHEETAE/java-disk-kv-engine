@@ -3,47 +3,18 @@ package geoindex.cache;
 import geoindex.api.PageResult;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * pageId 단위 JVM 캐시 엔진
- *
- * 책임:
- *   - pageId 단위 ConcurrentHashMap 캐시 보유
- *   - getOrMiss(): HIT/MISS 판단 (SpatialRecordManager.search()가 호출)
- *   - put(): MISS 후 DB 조회 결과를 JVM에 저장
- *   - clearCache(): JVM 캐시 초기화
- *   - TTL 만료 체크, maxSize 초과 시 evict
- *
- * 책임 아님:
- *   - 파일 검색 → SpatialRecordManager
- *   - pageId 변환 → SpatialIndex
- *   - DB 조회 → Spring
- *   - TTL 값 결정 → Spring Config
- *
- * 의존성:
- *   SpatialRecordManager → SpatialCacheEngine (단방향)
- *   SpatialCacheEngine → SpatialRecordManager 없음 (순환 참조 없음)
- */
-public class SpatialCacheEngine<T> {
-
+public class PageCacheStore<T> {
     private final CachePolicy policy;
     private volatile ConcurrentHashMap<Integer, CacheEntry<T>> pageCache;
 
-    public SpatialCacheEngine() {
-        this(CachePolicy.DEFAULT);
-    }
-
-    public SpatialCacheEngine(CachePolicy policy) {
+    public PageCacheStore(CachePolicy policy) {
         this.policy = policy;
         this.pageCache = new ConcurrentHashMap<>();
     }
-
-    // -------------------------------------------------------------------------
-    // HIT/MISS 판단 — SpatialRecordManager.search()가 호출
-    // -------------------------------------------------------------------------
-
     /**
      * pageId → HIT이면 캐시 데이터, MISS이면 codes 반환
      *
@@ -100,23 +71,24 @@ public class SpatialCacheEngine<T> {
     // 유틸
     // -------------------------------------------------------------------------
 
-    public long getCacheSize() {
-        return pageCache.size();
-    }
 
     public boolean isCached(int pageId) {
         CacheEntry<T> entry = pageCache.get(pageId);
         return entry != null && !entry.isExpired();
     }
 
-    public CachePolicy getPolicy() {
-        return policy;
+    public long getCacheSize() {
+        return pageCache.size();
     }
+
 
     private void evictOne() {
         Integer victim = pageCache.keys().nextElement();
         if (victim != null) {
             pageCache.remove(victim);
         }
+    }
+    public CachePolicy getPolicy() {
+        return policy;
     }
 }
