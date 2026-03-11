@@ -318,6 +318,7 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
     - SpatialCacheEngine 최상단 API 승격 (api/ 레이어)
     - SpatialRecordManager 파일 I/O 전담으로 책임 분리
     - atomic rename 기반 무중단 rebuild
+```
 
 ---
 
@@ -354,6 +355,10 @@ ConcurrentHashMap 교체로 해결
 
 PageCacheStore → ConcurrentHashMap (초기부터 적용)
 CacheManager   → HashMap → ConcurrentHashMap 교체
+
+PageCacheStore.put() addAll → 덮어쓰기
+  Thundering Herd 시 동일 pageId 동시 put
+  → 같은 데이터 → 덮어써도 결과 동일 → 중복 쌓임 방지
 
 rebuild() vs search() 충돌
   → close ~ reopen 구간 수 밀리초 + 주 1회 실행
