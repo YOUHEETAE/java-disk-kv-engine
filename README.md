@@ -39,10 +39,10 @@ flowchart TD
     end
 
     subgraph Engine["geo-index Engine (순수 Java)"]
-        SCE["SpatialCacheEngine\nsearch / putCache / rebuild"]
-        SRM["SpatialRecordManager\nput / searchRadiusCodesByPageId"]
-        PCS["PageCacheStore\nConcurrentHashMap / TTL / evict"]
+        SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
+        SCE["SpatialCacheEngine<T>\ngetOrMiss / put / clearCache"]
         IDX["GeoHashIndex\nMorton 코드 → pageId"]
+        CHM["ConcurrentHashMap\nMap<pageId, CacheEntry<T>>"]
 
         subgraph Storage["Storage Layer"]
             CM["CacheManager\nWrite-Back + rebuild"]
@@ -50,8 +50,8 @@ flowchart TD
             PG["Page 4KB"]
         end
 
-        SCE --> SRM
-        SCE --> PCS
+        SRM --> SCE
+        SCE --> CHM
         SRM --> IDX
         SRM --> CM
         CM --> DM
@@ -60,10 +60,10 @@ flowchart TD
 
     DB[("MariaDB")]
 
-    SCS --> SCE
-    PCS -->|HIT| RES([즉시 반환])
-    PCS -->|MISS| DB
-    DB -->|putCache| PCS
+    SCS --> SRM
+    CHM -->|HIT| RES([즉시 반환])
+    CHM -->|MISS| DB
+    DB -->|putCache| CHM
     DB --> RES
 ```
 
@@ -108,55 +108,43 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 → 5개 disjoint interval, pageId 12개만 I/O
 ```
 
-→ 설계 개선 상세 기록: [HILBERT_IMPLEMENTATION.md](./geo-index/src/main/java/geoindex/index/HILBERT_IMPLEMENTATION.md)
-
 ### JVM 캐시 + rebuild()
 
 ```
-실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
-Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
+첫 요청:
+  MiniDB → pageId 목록 반환 (0ms)
+  pageId별 캐시 확인 → MISS
+  MariaDB → 전체 데이터 조회
+  결과 → putCache() → JVM 캐시 저장
 
-하지만 Spatial Index가 제공하는 pageId는
-"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
-
-pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
-→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
+두 번째 요청 (같은 반경):
+  MiniDB → pageId 목록 반환 (0ms)
+  pageId별 캐시 확인 → HIT
+  MariaDB 왕복 없음 → 즉시 반환
 ```
 
 배치 업데이트 시:
-```java
-spatialCacheEngine.rebuild(srm ->
+```
+spatialRecordManager.rebuild(srm ->
     hospitalRepo.findAllCodes().forEach(h ->
         srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
     )
 );
-// atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
-// 요청 중단 없음
+→ atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
+→ 요청 중단 없음
 ```
 
 ---
 
 ## 성능 결과
 
-### 더미 데이터 벤치마크 (규모별 성능 추세)
+### 더미 데이터 벤치마크 (1,000회 평균)
 
-> 측정 조건: 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화
+> 측정 조건: JVM Warm-up 후 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화
 
 <div align=center>
 <img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
 </div>
-
-| 건수 | Full Scan | GeoHash | Hilbert |
-|------|----------|---------|---------|
-| 10,000 | 100ms | < 1ms | 29ms |
-| 20,000 | 133ms | < 1ms | 33ms |
-| 30,000 | 259ms | 2ms | 32ms |
-| 50,000 | 292ms | < 1ms | 33ms |
-| 79,081 | 434ms | < 1ms | 33ms |
-| 100,000 | 528ms | < 1ms | 47ms |
-| 200,000 | 660ms | 3ms | 24ms |
-| 500,000 | 768ms | < 1ms | 24ms |
-| 1,000,000 | 1,177ms | 6ms | 34ms |
 
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
 - **GeoHash**: 공간 밀도에 의존 O(P) → 대규모 데이터에서도 일정한 검색 성능 유지
@@ -190,12 +178,6 @@ IN (1,366건) 쿼리 오버헤드 ≈ BETWEEN 범위 스캔 비용
 
 **시나리오별 해석:**
 
-| 시나리오 | 개선율 | HIT율 | 특징 |
-|----------|--------|-------|------|
-| Random | 1.2x | 5.8% | Worst Case (캐시 재사용 없음) |
-| **Mixed** | **24.6x** | **95.9%** | **현실적 서비스 트래픽** |
-| Hotspot | 46.8x | 98.6% | Best Case (인기 지역 순환) |
-
 ```
 Random (Worst Case):    완전 랜덤 좌표 = 캐시 재사용 불가 → HIT  5.8% →  1.2x
 Mixed  (현실적 서비스):  70% 핫스팟     → HIT 95.9%        → 24.6x
@@ -213,7 +195,7 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
   ↓
 [MiniDB] pageId 목록 계산 (0ms)
   ↓
-[SpatialCacheEngine] pageId 캐시 확인
+[SpatialCacheService] pageId 캐시 확인
   ├─ HIT → 즉시 반환 (MariaDB 왕복 없음)
   └─ MISS → [MariaDB] WHERE hospital_code IN (...) + JOIN
               → 결과를 pageId 단위로 캐시 저장
@@ -226,56 +208,6 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 → 재빌드 중 이전 파일로 서비스 유지 (atomic rename)
 → 완료 후 파일 교체 + JVM 캐시 자동 초기화
 ```
-
----
-
-## 모듈 구조
-
-```
-geo-index/
-  storage/
-    Page.java               4KB 페이지
-    DiskManager.java        sparse 매핑 테이블 + atomic rename rebuild
-    PageLayout.java         슬롯 페이지 구조
-  buffer/
-    CacheManager.java       Write-Back 캐싱 + rebuild
-  api/
-    SpatialCacheEngine.java     최상단 API (search / putCache / rebuild / clearCache)
-    SpatialRecordManager.java   파일 I/O 전담 (put / searchRadiusCodesByPageId / rebuild)
-    RecordManager.java          Key-Value 저장
-    PageResult.java             캐시 조회 결과 값 객체
-    RecordId.java               O(1) 직접 접근 값 객체
-  cache/
-    PageCacheStore.java     JVM 캐시 인프라 (ConcurrentHashMap / TTL / evict)
-    CachePolicy.java        TTL / maxSize 정책
-    CacheEntry.java         캐시 값 래퍼 (데이터 + 만료시각)
-  index/
-    SpatialIndex.java       인터페이스
-    GeoHash.java            Morton 코드 인코딩/디코딩
-    GeoHashIndex.java       Morton 직접 pageId 매핑
-    HilbertCurve.java       힐버트 곡선 계산
-    HilbertIndex.java       Multi-Interval Query 구현
-  benchmark/
-    FullScanBenchmark.java
-    GeoHashBenchmark.java
-    HilbertBenchmark.java
-    BenchmarkRunner.java
-  util/
-    GeoUtils.java           Haversine 거리 계산
-```
-
----
-
-## 기술 스택
-
-| 항목 | 내용 |
-|------|------|
-| **언어** | Java 21 |
-| **스토리지** | RandomAccessFile (페이지 기반) |
-| **외부 의존성** | 없음 (Framework 없이 순수 Java) |
-| **테스트** | JUnit 5 |
-| **데이터** | 79,081건 한국 병원 데이터 |
-| **시각화** | Python (folium, matplotlib) |
 
 ---
 
@@ -296,73 +228,123 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 
 ---
 
+## Phase 12: 동시성 이슈 해결
+
+### 왜 이 엔진은 동시성이 특히 중요한가
+
+```
+일반 캐시:
+  잘못된 캐시 → TTL 만료 후 자동 복구 ✅
+
+이 엔진:
+  put() → pageId 계산 → Page에 영구 기록
+  한번 잘못 기록된 Page = rebuild() 전까지 영원히 틀린 결과
+  데이터 정확성 = 생명
+```
+
+### 해결한 버그 4가지
+
+| 버그 | 증상 | 원인 | 해결 기법 |
+|------|------|------|----------|
+| ByteBuffer position 공유 | `BufferUnderflowException` | `position()` 상태 공유 | 절대 위치 메서드 교체 |
+| Page 객체 중복 생성 | 데이터 유실 | check-then-act 비원자성 | `computeIfAbsent` |
+| read/write 동시 접근 | GeoIndex 결과 누락 | 중간 상태 노출 | `synchronized(page)` |
+| overflow pageId 중복 할당 | 데이터 덮어씀 | `ArrayDeque` thread-unsafe | `ConcurrentLinkedDeque` |
+
+### 검증 결과 (스레드 500 동시)
+
+```
+비교 lat=37.5263327 lng=127.0274689
+FullScan: 6460건 | GeoIndex: 6460건 | 일치: true | 누락: 0건 ✅
+
+비교 lat=37.5015093 lng=127.0217788
+FullScan: 5234건 | GeoIndex: 5234건 | 일치: true | 누락: 0건 ✅
+
+전체 100건 비교 → 동시성으로 인한 누락 0건 ✅
+```
+
+→ 상세 내용: [CONCURRENCY.md](./CONCURRENCY.md)
+
+---
+
+## 모듈 구조
+
+```
+geo-index/
+  storage/
+    Page.java               4KB 페이지
+    DiskManager.java        sparse 매핑 테이블 + atomic rename rebuild
+    PageLayout.java         슬롯 페이지 구조 (절대 위치 읽기/쓰기)
+  buffer/
+    CacheManager.java       Write-Back 캐싱 + rebuild + computeIfAbsent
+  api/
+    RecordManager.java          Key-Value 저장
+    SpatialRecordManager.java   최상단 API (search / put / putCache / rebuild)
+    PageResult.java             캐시 조회 결과 값 객체
+  cache/
+    SpatialCacheEngine.java     JVM 캐시 (getOrMiss / put / clearCache)
+    CachePolicy.java            TTL / maxSize 정책
+    CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
+  index/
+    SpatialIndex.java       인터페이스
+    GeoHash.java            Morton 코드 인코딩/디코딩
+    GeoHashIndex.java       Morton 직접 pageId 매핑
+    HilbertCurve.java       힐버트 곡선 계산
+    HilbertIndex.java       Multi-Interval Query 구현
+  benchmark/
+    FullScanBenchmark.java
+    GeoHashBenchmark.java
+    HilbertBenchmark.java
+    BenchmarkRunner.java
+  util/
+    GeoUtils.java           Haversine 거리 계산
+CONCURRENCY.md              동시성 이슈 해결 상세 기록
+```
+
+---
+
+## 기술 스택
+
+| 항목 | 내용 |
+|------|------|
+| **언어** | Java 21 |
+| **스토리지** | RandomAccessFile (페이지 기반) |
+| **외부 의존성** | 없음 (Framework 없이 순수 Java) |
+| **테스트** | JUnit 5 |
+| **데이터** | 79,081건 한국 병원 데이터 |
+| **시각화** | Python (folium, matplotlib) |
+
+---
+
 ## 로드맵
 
 ```
-✅ Phase 1:  Storage (Page, DiskManager, CacheManager)
-✅ Phase 2:  API (RecordManager, PageLayout)
-✅ Phase 3:  GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
-✅ Phase 4:  Benchmark (Full Scan vs GeoHash vs Hilbert)
-✅ Phase 5:  Hilbert Multi-Interval Query + Seek Count 비교
-✅ Phase 6:  DiskManager sparse 매핑 테이블
-✅ Phase 7:  Morton 코드 직접 pageId 매핑 (pageId 분산 187개)
-✅ Phase 8:  실제 병원 데이터 연동 + A/B 벤치마크 (50회 평균)
-✅ Phase 9:  SpatialCacheService (JVM 캐시) + 3종 시나리오 벤치마크
+✅ Phase 1: Storage (Page, DiskManager, CacheManager)
+✅ Phase 2: API (RecordManager, PageLayout)
+✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
+✅ Phase 4: Benchmark (Full Scan vs GeoHash vs Hilbert)
+✅ Phase 5: Hilbert Multi-Interval Query + Seek Count 비교
+✅ Phase 6: DiskManager sparse 매핑 테이블
+✅ Phase 7: Morton 코드 직접 pageId 매핑 (pageId 분산 187개)
+✅ Phase 8: 실제 병원 데이터 연동 + A/B 벤치마크 (50회 평균)
+✅ Phase 9: SpatialCacheService (JVM 캐시) + 3종 시나리오 벤치마크
     - Map<pageId, List<HospitalData>> Lazy 캐시
     - pageId 전체 저장 + MBR 필터링으로 누락/초과 방지
     - Random / Mixed / Hotspot 100회 시나리오 측정
     - Mixed 24.6x / Hotspot 46.8x 개선 확인
 ✅ Phase 10: 캐시 운영 고도화
     - CachePolicy (TTL / maxSize), CacheEntry (만료시각 래퍼)
-    - PageCacheStore 분리 (캐시 인프라 cache/ 레이어로 분리)
-    - SpatialCacheEngine 최상단 API 승격 (api/ 레이어)
-    - SpatialRecordManager 파일 I/O 전담으로 책임 분리
+    - SpatialCacheEngine 리팩토링 (SpatialRecordManager 의존성 제거)
+    - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
     - atomic rename 기반 무중단 rebuild
-```
-
----
-
-## 설계로 해결한 것들
-
-### 장애복구
-```
-WAL 없이 atomic rename으로 보장
-
-rebuild() 중 어느 시점 크래시
-  rename 전  → 기존 파일 그대로 유지
-  rename 중  → OS atomic 보장
-  rename 후  → 새 파일로 정상 서비스
-
-재시작 → loadPageMap() → 헤더에서 자동 복구
-```
-
-### 영속화
-```
-별도 인덱스 저장 없이 재시작 후 정상 동작
-
-GeoHashIndex → 상태 없음, lat/lng → Morton 코드 매번 계산
-DiskManager  → 재시작 시 loadPageMap() 자동 복구
-JVM 캐시     → Lazy 복구 (첫 요청부터 자연스럽게 채워짐)
-
-캐시 영속화는 의도적으로 제외
-  → 영속화하면 MISS 시나리오 자체가 없어짐
-  → 벤치마크 3종(Random/Mixed/Hotspot) 의미 사라짐
-```
-
-### 동시성
-```
-ConcurrentHashMap 교체로 해결
-
-PageCacheStore → ConcurrentHashMap (초기부터 적용)
-CacheManager   → HashMap → ConcurrentHashMap 교체
-
-PageCacheStore.put() addAll → 덮어쓰기
-  Thundering Herd 시 동일 pageId 동시 put
-  → 같은 데이터 → 덮어써도 결과 동일 → 중복 쌓임 방지
-
-rebuild() vs search() 충돌
-  → close ~ reopen 구간 수 밀리초 + 주 1회 실행
-  → ReadWriteLock 추가는 복잡도 대비 효과 없음
+    - SpatialCache<T> 인터페이스 제거 (단순화)
+✅ Phase 12: 동시성 이슈 해결
+    - ByteBuffer position() → 절대 위치 메서드 교체 (BufferUnderflowException 제거)
+    - CacheManager.getPage() → computeIfAbsent (Page 객체 중복 생성 방지)
+    - writeWithOverflow() / readAllCodesFromChain() → synchronized(page) (누락 방지)
+    - overflowFreeList → ConcurrentLinkedDeque (중복 pageId 할당 방지)
+    - 스레드 500 동시 요청 검증: 동시성으로 인한 누락 0건 확인
+⬜ Phase 13: 체크섬 기반 파일 손상 감지 + 자동 재빌드
 ```
 
 ---
