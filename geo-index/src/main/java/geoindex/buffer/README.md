@@ -44,6 +44,51 @@ flush:
 
 ---
 
+## Phase 12: getPage() computeIfAbsent 교체
+
+### 왜 수정했는가?
+
+기존 `getPage()`는 check-then-act 패턴으로 구현되어 있었다. 두 연산 사이에 원자성이 없어 동시 접근 시 같은 pageId에 대해 서로 다른 `Page` 객체가 생성됐다.
+
+```
+스레드 A: cache.get(42) → null
+스레드 B: cache.get(42) → null          ← 동시에 null 확인
+스레드 A: readPage(42)  → Page@0xAAA
+스레드 B: readPage(42)  → Page@0xBBB    ← 다른 객체 생성
+스레드 A: cache.put(42, Page@0xAAA)
+스레드 B: cache.put(42, Page@0xBBB)     ← 덮어씀
+
+결과:
+  스레드 A → Page@0xAAA 보유
+  캐시     → Page@0xBBB
+  → 스레드 A의 write는 캐시에 반영 안 됨 → 데이터 유실
+```
+
+### 해결
+
+`computeIfAbsent`로 check-then-act를 단 하나의 원자 연산으로 통합했다.
+
+```java
+// Before
+Page page = cache.get(pageId);
+if (page == null) {
+    page = diskManager.readPage(pageId);
+    cache.put(pageId, page);
+}
+return page;
+
+// After
+return cache.computeIfAbsent(pageId, diskManager::readPage);
+```
+
+`computeIfAbsent`는 같은 key에 대해 mapping function을 단 한 번만 실행한다. 모든 스레드가 동일한 `Page` 객체 참조를 공유하게 된다.
+
+이 수정은 `SpatialRecordManager`의 `synchronized(page)`와 반드시 함께 동작해야 한다. 같은 pageId = 같은 Page 객체가 보장되어야 `synchronized(page)`가 올바른 락으로 동작하기 때문이다.
+
+> 자세한 내용은 [CONCURRENCY.md](../../../../../CONCURRENCY.md) Bug 2 참고
+
+---
+
 ## 핵심 개념
 
 ### Write-Back vs Write-Through
@@ -58,20 +103,6 @@ flush:
 - 수동 플러시 (flush() 또는 close() 호출)
 - 크기 제한 없음 (무제한 캐시)
 - Eviction 정책 없음
-
-### ConcurrentHashMap — 동시성 보장
-
-```
-Spring 멀티스레드 환경에서 rebuild() 후 다수 요청 동시 유입
-→ 전부 MISS → 동시에 cache.put() 호출
-
-HashMap:
-  동시 put → 내부 구조 깨짐 (무한루프 / NPE) ❌
-
-ConcurrentHashMap:
-  세그먼트 락으로 동시 put 안전 보장 ✅
-  읽기는 락 없이 동시 실행 ✅
-```
 
 ### rebuild() — 임시 CacheManager로 구축 후 교체
 
@@ -108,25 +139,8 @@ ConcurrentHashMap:
 
 ---
 
-## 향후 개선
-
-### Buffer Pool (계획)
-- 캐시 크기 제한 (예: 100 페이지)
-- LRU eviction 정책
-- Dirty 페이지 eviction 시 디스크 쓰기
-
-```java
-// 미래 API
-CacheManager cache = new CacheManager(diskManager, 100); // 최대 100 페이지
-cache.getPage(1000); // 캐시 가득 차면 LRU 페이지 evict
-```
-
----
-
 ## 의존성
 
-```
-CacheManager → DiskManager  (디스크 연산)
-CacheManager → Page         (페이지 객체)
-java.util.concurrent.ConcurrentHashMap (캐시 저장소)
-```
+- `geoindex.storage.DiskManager` — 디스크 연산
+- `geoindex.storage.Page` — 페이지 객체
+- `java.util.concurrent.ConcurrentHashMap` — thread-safe 캐시 저장소
