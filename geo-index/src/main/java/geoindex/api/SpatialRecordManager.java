@@ -6,6 +6,7 @@ import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.function.Consumer;
 
 public class SpatialRecordManager {
@@ -16,7 +17,7 @@ public class SpatialRecordManager {
 
     private final CacheManager cacheManager;
     private final SpatialIndex spatialIndex;
-    private Deque<Integer> overflowFreeList;
+    private ConcurrentLinkedDeque<Integer> overflowFreeList;
 
     public SpatialRecordManager(CacheManager cacheManager, SpatialIndex spatialIndex) {
         this.cacheManager = cacheManager;
@@ -41,20 +42,22 @@ public class SpatialRecordManager {
     }
 
     private void writeWithOverflow(Page page, byte[] value) {
-        int slotId = PageLayout.writeRecord(page, value);
+        synchronized (page) {
+            int slotId = PageLayout.writeRecord(page, value);
 
-        if (slotId == -1) {
-            int overflowPageId = PageLayout.getOverflowPageId(page);
-            if (overflowPageId == PageLayout.NO_OVERFLOW) {
-                overflowPageId = allocateOverflowPage();
-                PageLayout.setOverflowPageId(page, overflowPageId);
+            if (slotId == -1) {
+                int overflowPageId = PageLayout.getOverflowPageId(page);
+                if (overflowPageId == PageLayout.NO_OVERFLOW) {
+                    overflowPageId = allocateOverflowPage();
+                    PageLayout.setOverflowPageId(page, overflowPageId);
+                }
+                Page overflowPage = cacheManager.getPage(overflowPageId);
+                if (!PageLayout.isInitialized(overflowPage)) {
+                    PageLayout.initializePage(overflowPage);
+                }
+                writeWithOverflow(overflowPage, value);
+                cacheManager.putPage(overflowPage);
             }
-            Page overflowPage = cacheManager.getPage(overflowPageId);
-            if (!PageLayout.isInitialized(overflowPage)) {
-                PageLayout.initializePage(overflowPage);
-            }
-            writeWithOverflow(overflowPage, value);
-            cacheManager.putPage(overflowPage);
         }
     }
 
@@ -113,22 +116,25 @@ public class SpatialRecordManager {
 
     private List<String> readAllCodesFromChain(int pageId) {
         Page page = cacheManager.getPage(pageId);
-        if (!PageLayout.isInitialized(page)) return Collections.emptyList();
+        synchronized (page) {
+            if (!PageLayout.isInitialized(page)) return Collections.emptyList();
 
-        List<String> codes = new ArrayList<>();
-        collectCodes(page, codes);
+            List<String> codes = new ArrayList<>();
+            collectCodes(page, codes);
 
-        int overflowPageId = PageLayout.getOverflowPageId(page);
-        while (overflowPageId != PageLayout.NO_OVERFLOW) {
-            Page overflowPage = cacheManager.getPage(overflowPageId);
-            if (!PageLayout.isInitialized(overflowPage)) break;
-            collectCodes(overflowPage, codes);
-            overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+            int overflowPageId = PageLayout.getOverflowPageId(page);
+            while (overflowPageId != PageLayout.NO_OVERFLOW) {
+                Page overflowPage = cacheManager.getPage(overflowPageId);
+                synchronized (overflowPage) {
+                    if (!PageLayout.isInitialized(overflowPage)) break;
+                    collectCodes(overflowPage, codes);
+                    overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+                }
+            }
+
+            return codes;
         }
-
-        return codes;
     }
-
     private void collectCodes(Page page, List<String> codes) {
         for (byte[] bytes : PageLayout.readAllRecords(page)) {
             codes.add(new String(bytes));
@@ -152,14 +158,15 @@ public class SpatialRecordManager {
     // -------------------------------------------------------------------------
 
     private int allocateOverflowPage() {
-        if (overflowFreeList.isEmpty()) {
+        Integer pageId = overflowFreeList.poll();
+        if (pageId == null) {
             throw new IllegalStateException("overflow page pool exhausted");
         }
-        return overflowFreeList.pop();
+        return pageId;
     }
 
-    private static Deque<Integer> buildFreeList() {
-        Deque<Integer> freeList = new ArrayDeque<>();
+    private static ConcurrentLinkedDeque<Integer> buildFreeList() {
+        ConcurrentLinkedDeque<Integer> freeList = new ConcurrentLinkedDeque<>();
         for (int i = PRIMARY_PAGES; i < TOTAL_PAGES; i++) {
             freeList.push(i);
         }

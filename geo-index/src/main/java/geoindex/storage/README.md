@@ -46,8 +46,41 @@ Page 내부 슬롯 구조 정의 및 레코드 읽기/쓰기
 
 **레코드 형식:**
 ```
-[keyLength (4)][key][valueLength (4)][value]
+[valueLength (4)][value]
 ```
+
+---
+
+## Phase 12: ByteBuffer 절대 위치 읽기/쓰기
+
+### 왜 수정했는가?
+
+`ByteBuffer`는 내부 `position` 상태를 가진다. 여러 스레드가 같은 `Page` 객체를 공유할 때 `position()`은 thread-safe하지 않다.
+
+```
+스레드 A: buffer.position(120)   ← 포지션 설정
+스레드 B: buffer.position(4088)  ← 덮어씀
+스레드 A: buffer.getInt()        ← 엉뚱한 위치 읽기 → BufferUnderflowException
+```
+
+### 해결
+
+`position()` 호출을 완전히 제거하고 절대 위치 메서드로 교체했다.
+
+```java
+// Before — position 공유 (thread-unsafe)
+buffer.position(offset);
+int valueLength = buffer.getInt();
+buffer.get(value);
+
+// After — 절대 위치 (thread-safe)
+int valueLength = buffer.getInt(offset);
+System.arraycopy(buffer.array(), offset + 4, value, 0, valueLength);
+```
+
+`buffer.getInt(index)`는 내부 position을 변경하지 않는다. 각 스레드가 독립적인 오프셋으로 접근하므로 충돌이 없다.
+
+> 자세한 내용은 [CONCURRENCY.md](../../../../../CONCURRENCY.md) Bug 1 참고
 
 ---
 
@@ -114,7 +147,7 @@ DATA_OFFSET  = 4 + 100_000 × 12 = 1,200,004 bytes ≈ 1.2MB
 5. 데이터 기록
 ```
 
-**헤더 엔트리는 새 페이지일 때만 추가합니다.**
+헤더 엔트리는 새 페이지일 때만 추가합니다.
 기존 페이지 업데이트는 데이터만 덮어씁니다 → O(1) 고정 비용.
 
 ### writePage (기존 페이지)
@@ -181,40 +214,3 @@ atomic rename:
 | 헤더 크기 | 없음 | 고정 1.2MB |
 
 Morton 직접 pageId를 사용하려면 sparse 매핑이 필수입니다.
-
----
-
-## 주요 메서드
-
-```java
-Page readPage(int pageId)                    // pageMap 조회 → 디스크 읽기
-void writePage(Page page)                    // 신규/기존 분기 → 디스크 쓰기
-void rebuild(DiskManagerLoader loader)       // atomic rename 기반 파일 재구축
-void close()                                 // 파일 핸들 닫기
-```
-
----
-
-## 테스트: testFileSizeIsSparse
-
-```java
-// pageId가 60,712,140이어도 파일은 10MB 이하여야 함
-int[] pageIds = {60_712_140, 60_712_141, 60_712_200};
-
-long fileSize = Files.size(Path.of(TEST_FILE));
-assertTrue(fileSize < 10 * 1024 * 1024);
-
-// 결과: 1,212,292 bytes
-// = 1,200,004 (헤더) + 3 × 4,096 (페이지 3개)
-```
-
----
-
-## 의존성
-
-```
-storage/
-  Page.java       순수 데이터 구조 (의존성 없음)
-  PageLayout.java Page 읽기/쓰기 유틸 (Page 의존)
-  DiskManager.java RandomAccessFile 기반 I/O
-```

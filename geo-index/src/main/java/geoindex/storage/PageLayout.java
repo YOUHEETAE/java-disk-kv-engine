@@ -14,7 +14,7 @@ public class PageLayout {
     public static final int SLOT_SIZE           = 8;
     public static final int NO_OVERFLOW         = -1;
 
-    private PageLayout(){}
+    private PageLayout() {}
 
     public static boolean isInitialized(Page page) {
         return page.buffer().getInt(OFFSET_MAGIC) == 0xCAFEBABE;
@@ -35,19 +35,18 @@ public class PageLayout {
         int newOffset      = freeSpaceStart - recordSize;
         int slotDirEnd     = HEADER_SIZE + (recordCount + 1) * SLOT_SIZE;
 
-        if (newOffset < slotDirEnd) return -1; // 공간 부족
+        if (newOffset < slotDirEnd) return -1;
 
         ByteBuffer buffer = page.buffer();
-        buffer.position(newOffset);
-        buffer.putInt(value.length);
-        buffer.put(value);
+        buffer.putInt(newOffset, value.length);
+        System.arraycopy(value, 0, buffer.array(), newOffset + 4, value.length);
 
         setSlot(page, recordCount, newOffset, recordSize);
         setRecordCount(page, recordCount + 1);
         setFreeSpaceStart(page, newOffset);
         page.markDirty();
 
-        return recordCount; // slotId 반환
+        return recordCount;
     }
 
     public static byte[] readRecord(Page page, int slotId) {
@@ -56,11 +55,9 @@ public class PageLayout {
 
         int offset = getSlotOffset(page, slotId);
         ByteBuffer buffer = page.buffer();
-        buffer.position(offset);
-
-        int valueLength = buffer.getInt();
+        int valueLength = buffer.getInt(offset);
         byte[] value = new byte[valueLength];
-        buffer.get(value);
+        System.arraycopy(buffer.array(), offset + 4, value, 0, valueLength);
         return value;
     }
 

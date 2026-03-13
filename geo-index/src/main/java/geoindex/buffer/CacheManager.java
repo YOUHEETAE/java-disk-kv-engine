@@ -15,18 +15,10 @@ public class CacheManager {
     }
 
     public Page getPage(int pageId) {
-        Page page = cache.get(pageId);
-        if (page != null) {
-            return page;
-        }
-
-        page = diskManager.readPage(pageId);
-        if (page == null){
-            page = new Page(pageId);
-        }
-        cache.put(pageId, page);
-        return page;
+        return cache.computeIfAbsent(pageId, diskManager::readPage);
     }
+
+
     public void putPage(Page page) {
         page.markDirty();
         cache.put(page.getPageId(),page);
