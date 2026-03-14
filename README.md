@@ -39,10 +39,12 @@ flowchart TD
     end
 
     subgraph Engine["geo-index Engine (순수 Java)"]
-        SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
-        SCE["SpatialCacheEngine<T>\ngetOrMiss / put / clearCache"]
+        subgraph API["API Layer"]
+            SCE["SpatialCacheEngine\ngetOrMiss / put / clearCache\nConcurrentHashMap&lt;pageId, CacheEntry&gt;"]
+            SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
+        end
+
         IDX["GeoHashIndex\nMorton 코드 → pageId"]
-        CHM["ConcurrentHashMap\nMap<pageId, CacheEntry<T>>"]
 
         subgraph Storage["Storage Layer"]
             CM["CacheManager\nWrite-Back + rebuild"]
@@ -50,8 +52,7 @@ flowchart TD
             PG["Page 4KB"]
         end
 
-        SRM --> SCE
-        SCE --> CHM
+        SCE --> SRM
         SRM --> IDX
         SRM --> CM
         CM --> DM
@@ -60,10 +61,11 @@ flowchart TD
 
     DB[("MariaDB")]
 
-    SCS --> SRM
-    CHM -->|HIT| RES([즉시 반환])
-    CHM -->|MISS| DB
-    DB -->|putCache| CHM
+    SCS --> SCE
+    SCE -->|HIT| RES([즉시 반환])
+    SCE -->|MISS → codes 반환| SCS
+    SCS -->|MISS → DB 조회| DB
+    DB -->|putCache| SCE
     DB --> RES
 ```
 
@@ -228,7 +230,7 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 
 ---
 
-## Phase 12: 동시성 이슈 해결
+## Phase 11: 동시성 이슈 해결
 
 ### 왜 이 엔진은 동시성이 특히 중요한가
 
@@ -251,16 +253,32 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 | read/write 동시 접근 | GeoIndex 결과 누락 | 중간 상태 노출 | `synchronized(page)` |
 | overflow pageId 중복 할당 | 데이터 덮어씀 | `ArrayDeque` thread-unsafe | `ConcurrentLinkedDeque` |
 
+### 검증 방법론 — compare 엔드포인트
+
+동시성 버그는 단독 스레드에서는 재현되지 않는다. 다음 방식으로 검증했다.
+
+```
+GET /loadtest/compare?lat=&lng=&radius=
+
+동일 좌표로 FullScan / GeoIndex 동시 호출
+→ 결과를 hospital_code Set으로 비교
+→ 누락 건수 로그 출력
+
+스레드 1   → 재현 안 되면 로직 버그
+스레드 500 → 재현되면 동시성 버그 확정
+```
+
 ### 검증 결과 (스레드 500 동시)
 
 ```
-비교 lat=37.5263327 lng=127.0274689
-FullScan: 6460건 | GeoIndex: 6460건 | 일치: true | 누락: 0건 ✅
+수정 전:
+  FullScan 5040건 | GeoIndex 4610건 | 누락 430건 ❌
 
-비교 lat=37.5015093 lng=127.0217788
-FullScan: 5234건 | GeoIndex: 5234건 | 일치: true | 누락: 0건 ✅
+수정 후:
+  비교 lat=37.5263327 lng=127.0274689
+  FullScan: 6460건 | GeoIndex: 6460건 | 누락: 0건 ✅
 
-전체 100건 비교 → 동시성으로 인한 누락 0건 ✅
+  전체 100건 비교 → 동시성으로 인한 누락 0건 ✅
 ```
 
 → 상세 내용: [CONCURRENCY.md](./CONCURRENCY.md)
@@ -278,11 +296,13 @@ geo-index/
   buffer/
     CacheManager.java       Write-Back 캐싱 + rebuild + computeIfAbsent
   api/
-    RecordManager.java          Key-Value 저장
-    SpatialRecordManager.java   최상단 API (search / put / putCache / rebuild)
+    SpatialCacheEngine.java     최상단 API — JVM 캐시 (getOrMiss / put / clearCache)
+    SpatialRecordManager.java   파일 검색 / 저장 / rebuild
     PageResult.java             캐시 조회 결과 값 객체
+    RecordId.java               레코드 물리 위치 값 객체 (pageId + slotId)
+    RecordManager.java          Key-Value 저장
   cache/
-    SpatialCacheEngine.java     JVM 캐시 (getOrMiss / put / clearCache)
+    PageCacheStore.java         ConcurrentHashMap 기반 캐시 인프라
     CachePolicy.java            TTL / maxSize 정책
     CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
   index/
@@ -298,7 +318,6 @@ geo-index/
     BenchmarkRunner.java
   util/
     GeoUtils.java           Haversine 거리 계산
-CONCURRENCY.md              동시성 이슈 해결 상세 기록
 ```
 
 ---
@@ -338,13 +357,13 @@ CONCURRENCY.md              동시성 이슈 해결 상세 기록
     - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
     - atomic rename 기반 무중단 rebuild
     - SpatialCache<T> 인터페이스 제거 (단순화)
-✅ Phase 12: 동시성 이슈 해결
+✅ Phase 11: 동시성 이슈 해결
     - ByteBuffer position() → 절대 위치 메서드 교체 (BufferUnderflowException 제거)
     - CacheManager.getPage() → computeIfAbsent (Page 객체 중복 생성 방지)
     - writeWithOverflow() / readAllCodesFromChain() → synchronized(page) (누락 방지)
     - overflowFreeList → ConcurrentLinkedDeque (중복 pageId 할당 방지)
     - 스레드 500 동시 요청 검증: 동시성으로 인한 누락 0건 확인
-⬜ Phase 13: 체크섬 기반 파일 손상 감지 + 자동 재빌드
+⬜ Phase 12: GeoHash 경계 누락 수정
 ```
 
 ---
