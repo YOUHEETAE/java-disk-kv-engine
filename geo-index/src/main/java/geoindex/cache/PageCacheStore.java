@@ -42,7 +42,7 @@ public class PageCacheStore<T> {
     /**
      * MISS 후 DB 조회 결과를 pageId 단위로 JVM에 저장
      */
-    public void put(int pageId, List<T> data) {
+    public synchronized void put(int pageId, List<T> data) {
         if (policy.isMaxSizeEnabled() && pageCache.size() >= policy.getMaxSize()) {
             evictOne();
         }
