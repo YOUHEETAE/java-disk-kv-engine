@@ -172,6 +172,47 @@ private List<String> readAllCodesFromChain(int pageId) {
 
 ---
 
+### Bug 4. `overflowFreeList` 동시 할당 충돌
+
+**증상:**
+```
+같은 overflow pageId를 두 스레드가 동시에 할당받음
+→ 두 개의 서로 다른 데이터가 같은 페이지에 덮어씀
+→ 데이터 유실
+```
+
+**원인:**
+
+```java
+// ArrayDeque는 thread-safe하지 않음
+private ArrayDeque<Integer> overflowFreeList;
+
+// 동시 pop() → 두 스레드가 같은 pageId 반환 가능
+private int allocateOverflowPage() {
+    return overflowFreeList.pop();  // ← 비원자적
+}
+```
+
+**해결:** `ConcurrentLinkedDeque` + `poll()`
+
+```java
+// Before
+private ArrayDeque<Integer> overflowFreeList;
+return overflowFreeList.pop();
+
+// After
+private ConcurrentLinkedDeque<Integer> overflowFreeList;
+Integer pageId = overflowFreeList.poll();  // 원자적 꺼내기
+if (pageId == null) throw new IllegalStateException("overflow pool exhausted");
+return pageId;
+```
+
+> `ConcurrentLinkedDeque.poll()`은 락-프리(lock-free) 원자 연산이다.
+> 두 스레드가 동시에 호출해도 서로 다른 pageId를 반환함이 보장된다.
+
+
+---
+
 ---
 
 ## 하위 계층 동시성 이슈 발견 과정
@@ -356,46 +397,6 @@ public void flush() {
     }
 }
 ```
-
----
-
-### Bug 4. `overflowFreeList` 동시 할당 충돌
-
-**증상:**
-```
-같은 overflow pageId를 두 스레드가 동시에 할당받음
-→ 두 개의 서로 다른 데이터가 같은 페이지에 덮어씀
-→ 데이터 유실
-```
-
-**원인:**
-
-```java
-// ArrayDeque는 thread-safe하지 않음
-private ArrayDeque<Integer> overflowFreeList;
-
-// 동시 pop() → 두 스레드가 같은 pageId 반환 가능
-private int allocateOverflowPage() {
-    return overflowFreeList.pop();  // ← 비원자적
-}
-```
-
-**해결:** `ConcurrentLinkedDeque` + `poll()`
-
-```java
-// Before
-private ArrayDeque<Integer> overflowFreeList;
-return overflowFreeList.pop();
-
-// After
-private ConcurrentLinkedDeque<Integer> overflowFreeList;
-Integer pageId = overflowFreeList.poll();  // 원자적 꺼내기
-if (pageId == null) throw new IllegalStateException("overflow pool exhausted");
-return pageId;
-```
-
-> `ConcurrentLinkedDeque.poll()`은 락-프리(lock-free) 원자 연산이다.
-> 두 스레드가 동시에 호출해도 서로 다른 pageId를 반환함이 보장된다.
 
 ---
 
