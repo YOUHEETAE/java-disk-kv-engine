@@ -20,15 +20,19 @@ public class CacheManager {
 
 
     public void putPage(Page page) {
-        page.markDirty();
-        cache.put(page.getPageId(),page);
+        synchronized (page) {
+            page.markDirty();
+        }
+        cache.put(page.getPageId(), page);
     }
 
     public void flush() {
         for (Page page : cache.values()) {
-            if(page.isDirty()){
-            diskManager.writePage(page);
-            page.clearDirty();
+            synchronized (page) {
+                if (page.isDirty()) {
+                    diskManager.writePage(page);
+                    page.clearDirty();
+                }
             }
         }
     }
