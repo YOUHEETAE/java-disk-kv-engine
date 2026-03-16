@@ -51,6 +51,14 @@ Page 내부 슬롯 구조 정의 및 레코드 읽기/쓰기
 
 ---
 
+## Thread-safety
+
+`readPage()`, `writePage()` 모두 `synchronized`로 보호됨. `RandomAccessFile` 공유 파일 포인터의 seek/read race condition 해결.
+`Page.dirty`는 `volatile` 선언으로 스레드 간 가시성 보장.
+→ [CONCURRENCY.md Bug 5, 6, 7 참고](../../../../../CONCURRENCY.md)
+
+---
+
 ## Phase 12: ByteBuffer 절대 위치 읽기/쓰기
 
 ### 왜 수정했는가?

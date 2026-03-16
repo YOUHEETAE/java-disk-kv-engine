@@ -77,7 +77,44 @@ toPageId = morton >> SHIFT
   어떤 SHIFT 값으로도 충분한 분산 불가
 ```
 
-#### 4차: Morton 직접 pageId + sparse 매핑 테이블 (현재)
+#### 4차: Morton 직접 pageId + sparse 매핑 테이블
+
+```
+Morton 값 자체를 pageId로 사용
+DiskManager sparse 매핑: HashMap<pageId, 파일오프셋>
+→ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
+
+getPageIds():
+  네 꼭짓점 → deinterleave → lngBits/latBits 범위 추출
+  → 격자 순회 → Morton 재조합 → pageId 수집
+
+결과: 반경 5km = 187개 pageId로 분산 (이전 1~2개 → 187개) ✅
+```
+
+#### 5차: getPageIds() 경계값 오버플로우 수정 (현재)
+
+```
+4차 구현에서 maxLatBits/maxLngBits 계산 시 유효 범위 초과 문제 발견.
+
+latToBits()는 최대 32767 (2^15 - 1)을 반환하지만
+maxLatBits = latToBits(maxLat, PRECISION) + 1 → 32768 가능
+
+interleave(32768, ...)는 잘못된 Morton 코드를 생성 → 경계 근처 페이지 누락.
+```
+
+**수정:**
+
+```java
+// Before
+long maxLatBits = latToBits(maxLat, PRECISION) + 1;
+long maxLngBits = lngToBits(maxLng, PRECISION) + 1;
+
+// After — 상한 클램핑
+long maxLatBits = Math.min((1L << 15) - 1, latToBits(maxLat, PRECISION) + 1);
+long maxLngBits = Math.min((1L << 15) - 1, lngToBits(maxLng, PRECISION) + 1);
+```
+
+이 버그는 단일 스레드에서도 재현되는 로직 버그다. 극좌표(위도 ±90°, 경도 ±180°) 근처 좌표를 검색할 때 경계 셀의 페이지가 누락된다.
 
 ```
 Morton 값 자체를 pageId로 사용
@@ -99,10 +136,11 @@ public int toPageId(double lat, double lng) {
     return (int) GeoHash.toMorton(lat, lng, PRECISION);
 }
 
-// getPageIds: 네 꼭짓점 → 격자 범위 → 전체 순회
+// getPageIds: 네 꼭짓점 → 격자 범위 → 전체 순회 (경계값 클램핑 포함)
 public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
     // MBR 네 꼭짓점 Morton 계산
     // deinterleave → minLngBits~maxLngBits, minLatBits~maxLatBits
+    // Math.min((1L<<15)-1, ...) 으로 상한 클램핑
     // 격자 순회 → interleave → (int)morton = pageId
 }
 ```

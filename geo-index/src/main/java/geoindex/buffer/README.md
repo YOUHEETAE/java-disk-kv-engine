@@ -44,6 +44,13 @@ flush:
 
 ---
 
+## Thread-safety
+
+`flush()`의 isDirty() 체크 → writePage() → clearDirty() 세 연산을 `synchronized(page)` 블록으로 원자적 보호. flush 도중 다른 스레드의 markDirty()로 인한 변경사항 유실 방지.
+→ [CONCURRENCY.md Bug 8 참고](../../../../../CONCURRENCY.md)
+
+---
+
 ## Phase 12: getPage() computeIfAbsent 교체
 
 ### 왜 수정했는가?

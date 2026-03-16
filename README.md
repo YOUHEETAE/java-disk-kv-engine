@@ -230,7 +230,7 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 
 ---
 
-## Phase 11: 동시성 이슈 해결
+## 동시성 이슈 해결
 
 ### 왜 이 엔진은 동시성이 특히 중요한가
 
@@ -244,14 +244,31 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
   데이터 정확성 = 생명
 ```
 
-### 해결한 버그 4가지
+### 해결한 버그
 
-| 버그 | 증상 | 원인 | 해결 기법 |
-|------|------|------|----------|
-| ByteBuffer position 공유 | `BufferUnderflowException` | `position()` 상태 공유 | 절대 위치 메서드 교체 |
-| Page 객체 중복 생성 | 데이터 유실 | check-then-act 비원자성 | `computeIfAbsent` |
-| read/write 동시 접근 | GeoIndex 결과 누락 | 중간 상태 노출 | `synchronized(page)` |
-| overflow pageId 중복 할당 | 데이터 덮어씀 | `ArrayDeque` thread-unsafe | `ConcurrentLinkedDeque` |
+| # | 버그 | 원인 | 해결 기법 |
+|---|------|------|----------|
+| 1 | ByteBuffer position 공유 → `BufferUnderflowException` | `position()` 상태 공유 | 절대 위치 메서드 교체 |
+| 2 | Page 객체 중복 생성 → 데이터 유실 | check-then-act 비원자성 | `computeIfAbsent` |
+| 3 | read/write 동시 접근 → GeoIndex 결과 누락 | 중간 상태 노출 | `synchronized(page)` |
+| 4 | overflow pageId 중복 할당 → 데이터 덮어씀 | `ArrayDeque` thread-unsafe | `ConcurrentLinkedDeque` |
+| 5 | `DiskManager.readPage()` seek/read race → 잘못된 데이터 반환 | `RandomAccessFile` 파일 포인터 공유 | `synchronized` |
+| 6 | `DiskManager.writePage()` 복합 race → 데이터 손상 | `HashMap`, `nextDataOffset`, `entryCount` 비원자성 | `synchronized` |
+| 7 | `Page.dirty` visibility 문제 → flush 누락 | `volatile` 미선언 | `volatile boolean dirty` |
+| 8 | `CacheManager.flush()` dirty flag race → 변경사항 유실 | isDirty-writePage-clearDirty 비원자성 | `synchronized(page)` |
+| 9 | `PageCacheStore.put()` maxSize 초과 | size 체크와 put 사이 race | `synchronized` |
+
+**근본 원인:**
+
+```
+SpatialRecordManager (Page 레벨 락 ✅)
+        ↓
+  CacheManager        (flush 동기화 ❌ → Bug 8)
+        ↓
+  DiskManager         (RandomAccessFile 동기화 ❌ → Bug 5, 6)
+```
+
+상위 계층의 락이 하위 계층의 thread-safety를 보장하지 않는다. 계층 전체를 독립적으로 보호해야 한다.
 
 ### 검증 방법론 — compare 엔드포인트
 
@@ -357,13 +374,21 @@ geo-index/
     - SpatialRecordManager 최상단 API 통합 (search / putCache / rebuild)
     - atomic rename 기반 무중단 rebuild
     - SpatialCache<T> 인터페이스 제거 (단순화)
-✅ Phase 11: 동시성 이슈 해결
+✅ Phase 11: 동시성 이슈 해결 (Bug 1~4)
     - ByteBuffer position() → 절대 위치 메서드 교체 (BufferUnderflowException 제거)
     - CacheManager.getPage() → computeIfAbsent (Page 객체 중복 생성 방지)
     - writeWithOverflow() / readAllCodesFromChain() → synchronized(page) (누락 방지)
     - overflowFreeList → ConcurrentLinkedDeque (중복 pageId 할당 방지)
     - 스레드 500 동시 요청 검증: 동시성으로 인한 누락 0건 확인
-⬜ Phase 12: GeoHash 경계 누락 수정
+✅ Phase 12: GeoHash 경계값 오버플로우 수정
+    - getPageIds() maxLatBits/maxLngBits → Math.min((1L<<15)-1, ...) 클램핑
+    - 극좌표 근처 좌표 검색 시 페이지 누락 방지
+✅ Phase 13: 하위 계층 동시성 이슈 해결 (Bug 5~9)
+    - DiskManager.readPage() / writePage() → synchronized (RandomAccessFile race 해결)
+    - Page.dirty → volatile (스레드 간 visibility 보장)
+    - CacheManager.flush() → synchronized(page) (dirty flag race 해결)
+    - PageCacheStore.put() → synchronized (maxSize race 해결)
+    - 스레드 500 동시 요청 검증: 데이터 누락 0건 확인
 ```
 
 ---
