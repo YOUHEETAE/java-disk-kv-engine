@@ -6,7 +6,9 @@ import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 public class SpatialRecordManager {
@@ -18,11 +20,21 @@ public class SpatialRecordManager {
     private final CacheManager cacheManager;
     private final SpatialIndex spatialIndex;
     private ConcurrentLinkedDeque<Integer> overflowFreeList;
+    private final ConcurrentHashMap<Integer, ReentrantReadWriteLock> pageLocks;
 
     public SpatialRecordManager(CacheManager cacheManager, SpatialIndex spatialIndex) {
         this.cacheManager = cacheManager;
         this.spatialIndex = spatialIndex;
         this.overflowFreeList = buildFreeList();
+        this.pageLocks = new ConcurrentHashMap<>();
+    }
+
+    // -------------------------------------------------------------------------
+    // 락 관리
+    // -------------------------------------------------------------------------
+
+    private ReentrantReadWriteLock getLock(int pageId) {
+        return pageLocks.computeIfAbsent(pageId, k -> new ReentrantReadWriteLock());
     }
 
     // -------------------------------------------------------------------------
@@ -32,32 +44,38 @@ public class SpatialRecordManager {
     public void put(double lat, double lng, byte[] value) {
         int pageId = spatialIndex.toPageId(lat, lng);
         Page page = cacheManager.getPage(pageId);
-
-        if (!PageLayout.isInitialized(page)) {
-            PageLayout.initializePage(page);
-        }
-
         writeWithOverflow(page, value);
-        cacheManager.putPage(page);
     }
 
     private void writeWithOverflow(Page page, byte[] value) {
-        synchronized (page) {
-            int slotId = PageLayout.writeRecord(page, value);
+        // primaryPage 락 하나로 전체 체인 보호
+        int primaryPageId = page.getPageId();
+        ReentrantReadWriteLock.WriteLock writeLock = getLock(primaryPageId).writeLock();
+        writeLock.lock();
+        try {
+            Page current = page;
+            while (true) {
+                if (!PageLayout.isInitialized(current)) {
+                    PageLayout.initializePage(current);
+                }
 
-            if (slotId == -1) {
-                int overflowPageId = PageLayout.getOverflowPageId(page);
+                int slotId = PageLayout.writeRecord(current, value);
+
+                if (slotId != -1) {
+                    cacheManager.putPage(current);
+                    return;
+                }
+
+                int overflowPageId = PageLayout.getOverflowPageId(current);
                 if (overflowPageId == PageLayout.NO_OVERFLOW) {
                     overflowPageId = allocateOverflowPage();
-                    PageLayout.setOverflowPageId(page, overflowPageId);
+                    PageLayout.setOverflowPageId(current, overflowPageId);
                 }
-                Page overflowPage = cacheManager.getPage(overflowPageId);
-                if (!PageLayout.isInitialized(overflowPage)) {
-                    PageLayout.initializePage(overflowPage);
-                }
-                writeWithOverflow(overflowPage, value);
-                cacheManager.putPage(overflowPage);
+                cacheManager.putPage(current);
+                current = cacheManager.getPage(overflowPageId);
             }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -86,17 +104,25 @@ public class SpatialRecordManager {
         List<byte[]> results = new ArrayList<>();
 
         for (int pageId : pageIds) {
-            Page page = cacheManager.getPage(pageId);
-            if (!PageLayout.isInitialized(page)) continue;
+            ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
+            readLock.lock();
+            try {
+                Page page = cacheManager.getPage(pageId);
+                if (!PageLayout.isInitialized(page)) continue;
 
-            results.addAll(PageLayout.readAllRecords(page));
+                results.addAll(PageLayout.readAllRecords(page));
 
-            int overflowPageId = PageLayout.getOverflowPageId(page);
-            while (overflowPageId != PageLayout.NO_OVERFLOW) {
-                Page overflowPage = cacheManager.getPage(overflowPageId);
-                if (!PageLayout.isInitialized(overflowPage)) break;
-                results.addAll(PageLayout.readAllRecords(overflowPage));
-                overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+                int overflowPageId = PageLayout.getOverflowPageId(page);
+                while (overflowPageId != PageLayout.NO_OVERFLOW) {
+                    // overflow 페이지는 별도 락 없이 읽음
+                    // primaryPage 락이 전체 체인을 보호
+                    Page overflowPage = cacheManager.getPage(overflowPageId);
+                    if (!PageLayout.isInitialized(overflowPage)) break;
+                    results.addAll(PageLayout.readAllRecords(overflowPage));
+                    overflowPageId = PageLayout.getOverflowPageId(overflowPage);
+                }
+            } finally {
+                readLock.unlock();
             }
         }
 
@@ -115,8 +141,11 @@ public class SpatialRecordManager {
     // -------------------------------------------------------------------------
 
     private List<String> readAllCodesFromChain(int pageId) {
-        Page page = cacheManager.getPage(pageId);
-        synchronized (page) {
+        // primaryPage 락 하나로 전체 체인 보호
+        ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
+        readLock.lock();
+        try {
+            Page page = cacheManager.getPage(pageId);
             if (!PageLayout.isInitialized(page)) return Collections.emptyList();
 
             List<String> codes = new ArrayList<>();
@@ -124,17 +153,20 @@ public class SpatialRecordManager {
 
             int overflowPageId = PageLayout.getOverflowPageId(page);
             while (overflowPageId != PageLayout.NO_OVERFLOW) {
+                // overflow 페이지는 별도 락 없이 읽음
+                // primaryPage 락이 전체 체인을 보호
                 Page overflowPage = cacheManager.getPage(overflowPageId);
-                synchronized (overflowPage) {
-                    if (!PageLayout.isInitialized(overflowPage)) break;
-                    collectCodes(overflowPage, codes);
-                    overflowPageId = PageLayout.getOverflowPageId(overflowPage);
-                }
+                if (!PageLayout.isInitialized(overflowPage)) break;
+                collectCodes(overflowPage, codes);
+                overflowPageId = PageLayout.getOverflowPageId(overflowPage);
             }
 
             return codes;
+        } finally {
+            readLock.unlock();
         }
     }
+
     private void collectCodes(Page page, List<String> codes) {
         for (byte[] bytes : PageLayout.readAllRecords(page)) {
             codes.add(new String(bytes));
@@ -151,6 +183,7 @@ public class SpatialRecordManager {
             loader.accept(tempSrm);
         });
         this.overflowFreeList = buildFreeList();
+        this.pageLocks.clear();
     }
 
     // -------------------------------------------------------------------------
