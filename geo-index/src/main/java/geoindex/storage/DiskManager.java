@@ -55,7 +55,7 @@ public class DiskManager {
         nextDataOffset = Math.max(DATA_OFFSET, dbFile.length());
     }
 
-    public Page readPage(int pageId) {
+    public synchronized Page readPage(int pageId) {
         Long offset = pageMap.get(pageId);
         if (offset == null) return new Page(pageId);
 
@@ -69,7 +69,7 @@ public class DiskManager {
         }
     }
 
-    public void writePage(Page page) {
+    public synchronized void writePage(Page page) {
         try {
             int pageId = page.getPageId();
             Long offset = pageMap.get(pageId);
