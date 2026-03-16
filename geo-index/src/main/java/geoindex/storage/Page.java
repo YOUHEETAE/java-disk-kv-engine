@@ -7,7 +7,7 @@ public class Page {
     public static final int PAGE_SIZE = 4096;
     private final int pageId;
     private final byte[] data;
-    private boolean dirty;
+    private volatile boolean dirty;
 
     public Page(int pageId) {
         this.pageId = pageId;
