@@ -40,8 +40,8 @@ flowchart TD
 
     subgraph Engine["geo-index Engine (순수 Java)"]
         subgraph API["API Layer"]
-            SCE["SpatialCacheEngine\ngetOrMiss / put / clearCache\nConcurrentHashMap&lt;pageId, CacheEntry&gt;"]
-            SRM["SpatialRecordManager\nsearch / put / putCache / rebuild"]
+            SCE["SpatialCacheEngine\nsearch / putCache / rebuild / clearCache"]
+            SRM["SpatialRecordManager\nsearchRadiusCodesByPageId / searchRadius / put / rebuild"]
         end
 
         IDX["GeoHashIndex\nMorton 코드 → pageId"]
@@ -250,7 +250,7 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 |---|------|------|----------|
 | 1 | ByteBuffer position 공유 → `BufferUnderflowException` | `position()` 상태 공유 | 절대 위치 메서드 교체 |
 | 2 | Page 객체 중복 생성 → 데이터 유실 | check-then-act 비원자성 | `computeIfAbsent` |
-| 3 | read/write 동시 접근 → GeoIndex 결과 누락 | 중간 상태 노출 | `synchronized(page)` |
+| 3 | read/write 동시 접근 → GeoIndex 결과 누락 | 중간 상태 노출 | `ReentrantReadWriteLock` |
 | 4 | overflow pageId 중복 할당 → 데이터 덮어씀 | `ArrayDeque` thread-unsafe | `ConcurrentLinkedDeque` |
 | 5 | `DiskManager.readPage()` seek/read race → 잘못된 데이터 반환 | `RandomAccessFile` 파일 포인터 공유 | `synchronized` |
 | 6 | `DiskManager.writePage()` 복합 race → 데이터 손상 | `HashMap`, `nextDataOffset`, `entryCount` 비원자성 | `synchronized` |
@@ -324,10 +324,11 @@ geo-index/
     CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
   index/
     SpatialIndex.java       인터페이스
-    GeoHash.java            Morton 코드 인코딩/디코딩
+    GeoHash.java            Morton 코드 인코딩 (toMorton / interleave)
     GeoHashIndex.java       Morton 직접 pageId 매핑
     HilbertCurve.java       힐버트 곡선 계산
     HilbertIndex.java       Multi-Interval Query 구현
+    HilbertIndexDebug.java  힐버트 인덱스 디버그 유틸
   benchmark/
     FullScanBenchmark.java
     GeoHashBenchmark.java
@@ -377,7 +378,7 @@ geo-index/
 ✅ Phase 11: 동시성 이슈 해결 (Bug 1~4)
     - ByteBuffer position() → 절대 위치 메서드 교체 (BufferUnderflowException 제거)
     - CacheManager.getPage() → computeIfAbsent (Page 객체 중복 생성 방지)
-    - writeWithOverflow() / readAllCodesFromChain() → synchronized(page) (누락 방지)
+    - writeWithOverflow() / readAllCodesFromChain() → ReentrantReadWriteLock 읽기/쓰기 분리 (누락 방지)
     - overflowFreeList → ConcurrentLinkedDeque (중복 pageId 할당 방지)
     - 스레드 500 동시 요청 검증: 동시성으로 인한 누락 0건 확인
 ✅ Phase 12: GeoHash 경계값 오버플로우 수정

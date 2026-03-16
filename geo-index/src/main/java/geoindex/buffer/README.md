@@ -51,7 +51,7 @@ flush:
 
 ---
 
-## Phase 12: getPage() computeIfAbsent 교체
+## Phase 11: getPage() computeIfAbsent 교체
 
 ### 왜 수정했는가?
 
@@ -90,7 +90,7 @@ return cache.computeIfAbsent(pageId, diskManager::readPage);
 
 `computeIfAbsent`는 같은 key에 대해 mapping function을 단 한 번만 실행한다. 모든 스레드가 동일한 `Page` 객체 참조를 공유하게 된다.
 
-이 수정은 `SpatialRecordManager`의 `synchronized(page)`와 반드시 함께 동작해야 한다. 같은 pageId = 같은 Page 객체가 보장되어야 `synchronized(page)`가 올바른 락으로 동작하기 때문이다.
+이 수정은 `SpatialRecordManager`의 `ReentrantReadWriteLock`과 반드시 함께 동작해야 한다. 같은 pageId = 같은 Page 객체가 보장되어야 락이 올바르게 동작하기 때문이다.
 
 > 자세한 내용은 [CONCURRENCY.md](../../../../../CONCURRENCY.md) Bug 2 참고
 

@@ -22,10 +22,7 @@ public interface SpatialIndex {
 | 메서드 | 역할 |
 |--------|------|
 | `toMorton(lat, lng, precision)` | 좌표 → Morton 코드 (Z-curve 비트 인터리빙) |
-| `deinterleave(morton)` | Morton → lngBits / latBits 분리 |
 | `interleave(lngBits, latBits)` | lngBits / latBits → Morton 재조합 |
-| `neighbor(morton, dLat, dLng)` | 인접 셀 계산 |
-| `getNeighbors(morton)` | 8방향 + 중심 셀 목록 반환 |
 
 **Morton 코드란?**
 
@@ -138,8 +135,8 @@ public int toPageId(double lat, double lng) {
 
 // getPageIds: 네 꼭짓점 → 격자 범위 → 전체 순회 (경계값 클램핑 포함)
 public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
-    // MBR 네 꼭짓점 Morton 계산
-    // deinterleave → minLngBits~maxLngBits, minLatBits~maxLatBits
+    // MBR 네 꼭짓점 좌표 계산
+    // latToBits/lngToBits → minLngBits~maxLngBits, minLatBits~maxLatBits
     // Math.min((1L<<15)-1, ...) 으로 상한 클램핑
     // 격자 순회 → interleave → (int)morton = pageId
 }
@@ -234,6 +231,7 @@ index/
   GeoHashIndex.java             Morton 직접 pageId 매핑
   HilbertCurve.java             힐버트 곡선 계산 로직
   HilbertIndex.java             Multi-Interval Query 구현
+  HilbertIndexDebug.java        힐버트 인덱스 디버그 유틸
   HILBERT_IMPLEMENTATION.md     힐버트 구현 과정 상세 기록
   GEOHASH_IMPLEMENTATION.md     GeoHash 설계 개선 과정 상세 기록
 ```

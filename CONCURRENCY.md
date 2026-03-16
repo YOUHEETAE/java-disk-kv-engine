@@ -139,30 +139,61 @@ readAllRecords():
 [Read  스레드]                 read_count(5) → 5개만 읽음 → 누락
 ```
 
-**해결:** `synchronized(page)`로 임계구역 설정
+**해결:** `primaryPageId` 단위 `ReentrantReadWriteLock`으로 읽기/쓰기 분리
 
 ```java
+private final ConcurrentHashMap<Integer, ReentrantReadWriteLock> pageLocks;
+
 private void writeWithOverflow(Page page, byte[] value) {
-    synchronized (page) {
-        int slotId = PageLayout.writeRecord(page, value);
-        if (slotId == -1) {
-            // overflow 처리 (동일하게 synchronized)
-        }
+    ReentrantReadWriteLock.WriteLock writeLock = getLock(page.getPageId()).writeLock();
+    writeLock.lock();
+    try {
+        // 전체 overflow 체인 순회 + 기록
+    } finally {
+        writeLock.unlock();
     }
 }
 
 private List<String> readAllCodesFromChain(int pageId) {
-    Page page = cacheManager.getPage(pageId);
-    synchronized (page) {
-        // 읽기 로직
+    ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
+    readLock.lock();
+    try {
+        // overflow 체인 전체 읽기
+    } finally {
+        readLock.unlock();
     }
 }
 ```
 
-> Page 객체 자체를 락으로 사용한다.
+> `synchronized(page)` 대비: 읽기 요청이 동시에 여러 스레드에서 진행 가능 → 읽기 처리량 향상
 > Bug 2 해결(computeIfAbsent)로 같은 pageId = 같은 Page 객체가 보장되므로
-> synchronized(page)가 올바르게 동작한다.
+> 락이 올바르게 동작한다.
 > **Bug 2와 Bug 3은 반드시 함께 해결해야 한다.**
+
+---
+
+---
+
+## 하위 계층 동시성 이슈 발견 과정
+
+Bug 1~4 수정 후에도 스레드 500 환경에서 간헐적 누락이 재현됐다.
+
+```
+1. JMeter 500 스레드 → 누락 발생
+
+2. 리셋 API(PageCacheStore만 초기화) + 단일 스레드 → 여전히 누락
+   JVM 캐시를 비운 상태에서도 단일 스레드로 누락이 재현됨
+
+3. 톰캣 재시작 + 단일 스레드 → 누락 없음
+   완전 재시작 시에는 사라짐 → JVM 내 어딘가에 오염된 상태가 남아있음
+
+4. 리셋 API에 CacheManager.clearCache() 추가 + 단일 스레드 → 누락 없음
+   PageCacheStore(JVM 앱 레벨 캐시)가 아니라 CacheManager 버퍼에 오염된 Page가 잔존
+```
+
+500 스레드가 CacheManager의 Page 버퍼를 오염시켰고, 오염된 Page가 단일 스레드에서도 그대로 반환되고 있었다. 버퍼를 초기화하면 디스크에서 새로 읽어오므로 정상 반환된다.
+
+상위 계층(`SpatialRecordManager`)의 락이 하위 계층(`CacheManager`, `DiskManager`)의 thread-safety를 보장하지 않는다는 것을 확인했다. 하위 계층을 독립적으로 조사한 결과 Bug 5~8이 발견됐다.
 
 ---
 
@@ -490,7 +521,7 @@ FullScan: 5765건 | GeoIndex: 5765건 | 일치: true | FS누락: 0건 ✅
 |------|----------|-----|
 | `storage/PageLayout.java` | `position()` 제거 → 절대 위치 메서드 | Bug 1 |
 | `buffer/CacheManager.java` | `getPage()` → `computeIfAbsent` | Bug 2 |
-| `api/SpatialRecordManager.java` | `writeWithOverflow()`, `readAllCodesFromChain()` → `synchronized(page)` | Bug 3 |
+| `api/SpatialRecordManager.java` | `writeWithOverflow()`, `readAllCodesFromChain()` → `ReentrantReadWriteLock` 읽기/쓰기 분리 | Bug 3 |
 | `api/SpatialRecordManager.java` | `overflowFreeList` → `ConcurrentLinkedDeque` | Bug 4 |
 | `storage/DiskManager.java` | `readPage()` → `synchronized` | Bug 5 |
 | `storage/DiskManager.java` | `writePage()` → `synchronized` | Bug 6 |

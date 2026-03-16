@@ -177,7 +177,7 @@ benchmark/
   Hospital.java                  병원 데이터 클래스 (toBytes / fromBytes)
   DummyDataGenerator.java        더미 데이터 생성 (SEED=42)
   FullScanBenchmark.java         Full Scan 측정
-  GeoHashBenchmark.java          GeoHash 측정
+  GeohashBenchmark.java          GeoHash 측정
   HilbertBenchmark.java          Hilbert 측정
   BenchmarkRunner.java           3방향 비교 + Seek Count 비교 실행
   SeekCountBenchmark.java        PageId 목록 → Seek Count 계산
