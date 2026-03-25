@@ -211,6 +211,37 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 → 완료 후 파일 교체 + JVM 캐시 자동 초기화
 ```
 
+### Spring MVC 연동
+
+순수 Spring MVC 프로젝트에 Maven 로컬 빌드로 연동하여 검증했습니다.
+
+```bash
+# geo-index 엔진 로컬 빌드
+mvn install
+```
+
+```xml
+<!-- Spring MVC 프로젝트 pom.xml -->
+<dependency>
+    <groupId>geoindex</groupId>
+    <artifactId>geo-index</artifactId>
+    <version>1.0-SNAPSHOT</version>
+</dependency>
+```
+
+```java
+// GeoIndexConfig — Storage / Buffer / API 레이어 빈 등록
+@Bean public DiskManager diskManager() { ... }
+@Bean public CacheManager cacheManager() { ... }
+@Bean public SpatialRecordManager spatialRecordManager() { ... }
+
+// SpatialCacheService — 엔진 호출
+spatialCacheEngine.search(lat, lng, radiusKm);    // HIT/MISS 판단
+spatialCacheEngine.putCache(pageId, dbResults);   // MISS 후 캐시 저장
+```
+
+위 성능 수치는 이 연동 환경에서 실제 한국 병원 데이터 79,081건으로 측정한 결과입니다.
+
 ---
 
 ## 핵심 인사이트
