@@ -421,6 +421,12 @@ geo-index/
     - CacheManager.flush() → synchronized(page) (dirty flag race 해결)
     - PageCacheStore.put() → synchronized (maxSize race 해결)
     - 스레드 500 동시 요청 검증: 데이터 누락 0건 확인
+✅ Phase 14: 엔진 메트릭 시스템 구현
+    - EngineMetrics — AtomicLong 카운터 + Supplier 실시간 조회
+    - MetricsSnapshot — 특정 시점 불변 값 객체
+    - 계층별 카운터 주입 (DiskManager / CacheManager / PageCacheStore / SpatialRecordManager)
+    - SpatialCacheEngine.getMetrics() — 최상단 메트릭 조회 API
+    - GeoIndexMetricsExporter — Micrometer Gauge 등록 → Prometheus / Grafana 연동
 ```
 
 ---
