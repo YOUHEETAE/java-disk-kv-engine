@@ -2,6 +2,7 @@ package geoindex.benchmark;
 
 import geoindex.api.RecordManager;
 import geoindex.buffer.CacheManager;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.util.GeoUtils;
 
@@ -21,8 +22,9 @@ public class FullScanBenchmark {
         try {
             List<Hospital> hospitals = generateDummyList(count);
 
-            diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
+            EngineMetrics metrics = new EngineMetrics();
+            diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
             RecordManager recordManager = new RecordManager(cacheManager);
 
             for (Hospital hospital : hospitals) {
@@ -61,8 +63,9 @@ public class FullScanBenchmark {
             List<Hospital> hospitals = generateDummyList(79081);
             System.out.println("generating " + hospitals.size() + "dummy data");
 
-            diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
+            EngineMetrics metrics = new EngineMetrics();
+            diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
             RecordManager recordManager = new RecordManager(cacheManager);
 
 

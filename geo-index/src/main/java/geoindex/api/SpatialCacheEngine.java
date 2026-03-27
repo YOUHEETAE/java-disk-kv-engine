@@ -3,9 +3,10 @@ package geoindex.api;
 import geoindex.cache.CacheEntry;
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.metric.EngineMetrics;
+import geoindex.metric.MetricsSnapshot;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 public class SpatialCacheEngine<T> {
@@ -13,14 +14,16 @@ public class SpatialCacheEngine<T> {
 
     private final SpatialRecordManager spatialRecordManager;
     private final PageCacheStore<T> pageCacheStore;
+    private final EngineMetrics engineMetrics;
 
-    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager) {
-        this(spatialRecordManager, CachePolicy.DEFAULT);
+    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, EngineMetrics engineMetrics) {
+        this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics);
     }
 
-    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, CachePolicy cachePolicy) {
+    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, CachePolicy cachePolicy, EngineMetrics engineMetrics) {
         this.spatialRecordManager = spatialRecordManager;
-        this.pageCacheStore = new  PageCacheStore<>(cachePolicy);
+        this.engineMetrics = engineMetrics;
+        this.pageCacheStore = new PageCacheStore<>(cachePolicy, engineMetrics);
     }
 
     // -------------------------------------------------------------------------
@@ -64,5 +67,16 @@ public class SpatialCacheEngine<T> {
 
     public void clearCache() {
         pageCacheStore.clearCache();
+    }
+
+    // -------------------------------------------------------------------------
+    // rebuild
+    // -------------------------------------------------------------------------
+
+    public MetricsSnapshot getMetrics() {
+        return engineMetrics.snapshot(
+                (int) pageCacheStore.getCacheSize(),
+                spatialRecordManager.getDirtyPageCount()
+        );
     }
 }

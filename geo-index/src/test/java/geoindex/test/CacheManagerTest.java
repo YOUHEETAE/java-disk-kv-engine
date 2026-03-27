@@ -2,6 +2,7 @@ package geoindex.test;
 
 
 import geoindex.buffer.CacheManager;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.storage.Page;
 import org.junit.jupiter.api.AfterEach;
@@ -20,8 +21,9 @@ class CacheManagerTest {
 
     @BeforeEach
     void setUp() {
-        diskManager = new DiskManager(TEST_FILE);
-        cacheManager = new CacheManager(diskManager);
+        EngineMetrics metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_FILE, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
     }
 
     @AfterEach
@@ -71,8 +73,9 @@ class CacheManagerTest {
         cacheManager.close();
 
         // 새로운 DiskManager와 CacheManager 생성 (인스턴스 필드 재할당)
-        diskManager = new DiskManager(TEST_FILE);
-        cacheManager = new CacheManager(diskManager);
+        EngineMetrics metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_FILE, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
 
         Page page2 = cacheManager.getPage(7);
 

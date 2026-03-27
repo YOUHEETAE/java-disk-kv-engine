@@ -1,5 +1,6 @@
 package geoindex.test;
 
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
@@ -21,7 +22,7 @@ class DiskManagerTest {
 
     @Test
     void test() {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
             Page page = new Page(0);
             byte[] data = page.getData();
@@ -41,7 +42,7 @@ class DiskManagerTest {
     }
     @Test
     void testWriteAndReadLargePageId() {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
             int largePageId = 60_712_140;
 
@@ -61,7 +62,7 @@ class DiskManagerTest {
 
     @Test
     void testFileSizeIsSparse() throws Exception {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         int[] pageIds = {60_712_140, 60_712_141, 60_712_200};
 
         for (int pageId : pageIds) {
@@ -85,7 +86,7 @@ class DiskManagerTest {
 
     @Test
     void testReadNonExistentPageReturnsEmpty() {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
             Page page = dm.readPage(999_999_999);
             assertNotNull(page);

@@ -2,6 +2,7 @@ package geoindex.api;
 
 import geoindex.buffer.CacheManager;
 import geoindex.index.SpatialIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
 
@@ -19,15 +20,19 @@ public class SpatialRecordManager {
 
     private final CacheManager cacheManager;
     private final SpatialIndex spatialIndex;
+    private final EngineMetrics engineMetrics;
     private ConcurrentLinkedDeque<Integer> overflowFreeList;
     private final ConcurrentHashMap<Integer, ReentrantReadWriteLock> pageLocks;
 
-    public SpatialRecordManager(CacheManager cacheManager, SpatialIndex spatialIndex) {
+    public SpatialRecordManager(CacheManager cacheManager, SpatialIndex spatialIndex,  EngineMetrics engineMetrics) {
         this.cacheManager = cacheManager;
         this.spatialIndex = spatialIndex;
         this.overflowFreeList = buildFreeList();
         this.pageLocks = new ConcurrentHashMap<>();
+        this.engineMetrics = engineMetrics;
     }
+
+
 
     // -------------------------------------------------------------------------
     // 락 관리
@@ -84,6 +89,7 @@ public class SpatialRecordManager {
     // -------------------------------------------------------------------------
 
     public Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
+        engineMetrics.incrementQueryCount();
         List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
         Map<Integer, List<String>> result = new LinkedHashMap<>();
 
@@ -91,7 +97,7 @@ public class SpatialRecordManager {
             List<String> codes = readAllCodesFromChain(pageId);
             if (!codes.isEmpty()) result.put(pageId, codes);
         }
-
+        engineMetrics.addPageIds(result.size());
         return result;
     }
 
@@ -179,7 +185,7 @@ public class SpatialRecordManager {
 
     public void rebuild(Consumer<SpatialRecordManager> loader) {
         cacheManager.rebuild(tempCm -> {
-            SpatialRecordManager tempSrm = new SpatialRecordManager(tempCm, spatialIndex);
+            SpatialRecordManager tempSrm = new SpatialRecordManager(tempCm, spatialIndex, engineMetrics);
             loader.accept(tempSrm);
         });
         this.overflowFreeList = buildFreeList();
@@ -204,5 +210,13 @@ public class SpatialRecordManager {
             freeList.push(i);
         }
         return freeList;
+    }
+
+    // -------------------------------------------------------------------------
+    // 메트릭
+    // -------------------------------------------------------------------------
+
+    public int getDirtyPageCount() {
+        return cacheManager.getDirtyPageCount();
     }
 }

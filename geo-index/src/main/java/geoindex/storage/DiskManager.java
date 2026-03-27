@@ -1,5 +1,7 @@
 package geoindex.storage;
 
+import geoindex.metric.EngineMetrics;
+
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,7 +25,10 @@ public class DiskManager {
     private int entryCount = 0;
     private long nextDataOffset = DATA_OFFSET;
 
-    public DiskManager(String filePath) {
+    private final EngineMetrics  engineMetrics;
+
+    public DiskManager(String filePath, EngineMetrics engineMetrics) {
+        this.engineMetrics = engineMetrics;
         this.filePath = filePath;
         try {
             this.dbFile = new RandomAccessFile(filePath, "rw");
@@ -32,6 +37,7 @@ public class DiskManager {
             throw new RuntimeException("DiskManager init failed", e);
         }
     }
+
 
     private void loadPageMap() throws IOException {
         if (dbFile.length() < MAP_OFFSET) {
@@ -56,6 +62,7 @@ public class DiskManager {
     }
 
     public synchronized Page readPage(int pageId) {
+        engineMetrics.incrementPageReadCount();
         Long offset = pageMap.get(pageId);
         if (offset == null) return new Page(pageId);
 
@@ -70,6 +77,7 @@ public class DiskManager {
     }
 
     public synchronized void writePage(Page page) {
+        engineMetrics.incrementPageWriteCount();
         try {
             int pageId = page.getPageId();
             Long offset = pageMap.get(pageId);
@@ -116,7 +124,7 @@ public class DiskManager {
         String tempPath = filePath + ".new";
         try {
             // 1. 임시 파일에 새 DiskManager 생성
-            DiskManager tempDm = new DiskManager(tempPath);
+            DiskManager tempDm = new DiskManager(tempPath, engineMetrics);
 
             // 2. 임시 파일에 데이터 구축 (기존 파일 살아있음)
             loader.load(tempDm);

@@ -3,6 +3,7 @@ package geoindex.test;
 import geoindex.api.PageResult;
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.metric.EngineMetrics;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -13,7 +14,7 @@ class PageCacheStoreTest {
 
     @Test
     void put_후_HIT() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
 
         store.put(100, List.of("H001", "H002", "H003"));
 
@@ -25,7 +26,7 @@ class PageCacheStoreTest {
 
     @Test
     void 없는_pageId_MISS() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
 
         PageResult<String> result = store.getOrMiss(999, List.of("H001"));
         assertFalse(result.isHit());
@@ -35,7 +36,7 @@ class PageCacheStoreTest {
 
     @Test
     void put_덮어쓰기_중복없음() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
 
         List<String> data = List.of("H001", "H002", "H003");
         store.put(100, data);
@@ -49,7 +50,7 @@ class PageCacheStoreTest {
 
     @Test
     void 동시_put_중복없음() throws InterruptedException {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
 
         List<String> data = List.of("H001", "H002", "H003");
 
@@ -68,7 +69,7 @@ class PageCacheStoreTest {
 
     @Test
     void clearCache_후_MISS() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
 
         store.put(100, List.of("H001", "H002"));
         store.put(200, List.of("H003", "H004"));

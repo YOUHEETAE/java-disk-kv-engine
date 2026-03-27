@@ -6,6 +6,7 @@ import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.cache.CachePolicy;
 import geoindex.index.GeoHashIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,7 @@ class RebuildTest {
 
     @Test
     void DiskManager_rebuild_후_기존데이터_사라짐() {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
 
         geoindex.storage.Page page = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(page);
@@ -51,7 +52,7 @@ class RebuildTest {
 
     @Test
     void DiskManager_rebuild_후_새데이터_저장됨() {
-        DiskManager dm = new DiskManager(TEST_FILE);
+        DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
 
         geoindex.storage.Page old = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(old);
@@ -78,8 +79,9 @@ class RebuildTest {
 
     @Test
     void CacheManager_rebuild_후_버퍼_비워짐() {
-        DiskManager dm = new DiskManager(TEST_FILE);
-        CacheManager cm = new CacheManager(dm);
+        EngineMetrics metrics = new EngineMetrics();
+        DiskManager dm = new DiskManager(TEST_FILE, metrics);
+        CacheManager cm = new CacheManager(dm, metrics);
 
         geoindex.storage.Page page = cm.getPage(5);
         page.getData()[0] = 42;
@@ -101,10 +103,11 @@ class RebuildTest {
 
     @Test
     void SpatialRecordManager_rebuild_후_기존데이터_사라짐() {
-        DiskManager dm = new DiskManager(TEST_FILE);
-        CacheManager cm = new CacheManager(dm);
-        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex());
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm);
+        EngineMetrics metrics = new EngineMetrics();
+        DiskManager dm = new DiskManager(TEST_FILE, metrics);
+        CacheManager cm = new CacheManager(dm, metrics);
+        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         srm.put(37.4985, 127.0280, "B0002".getBytes());
@@ -128,10 +131,11 @@ class RebuildTest {
 
     @Test
     void SpatialRecordManager_rebuild_후_새데이터_저장됨() {
-        DiskManager dm = new DiskManager(TEST_FILE);
-        CacheManager cm = new CacheManager(dm);
-        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex());
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm);
+        EngineMetrics metrics = new EngineMetrics();
+        DiskManager dm = new DiskManager(TEST_FILE, metrics);
+        CacheManager cm = new CacheManager(dm, metrics);
+        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
 
         srm.put(37.4979, 127.0276, "OLD_001".getBytes());
         cm.flush();
@@ -153,10 +157,11 @@ class RebuildTest {
 
     @Test
     void rebuild_중_기존_파일로_서비스됨() {
-        DiskManager dm = new DiskManager(TEST_FILE);
-        CacheManager cm = new CacheManager(dm);
-        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex());
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm);
+        EngineMetrics metrics = new EngineMetrics();
+        DiskManager dm = new DiskManager(TEST_FILE, metrics);
+        CacheManager cm = new CacheManager(dm, metrics);
+        SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         cm.flush();

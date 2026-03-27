@@ -6,6 +6,8 @@ import geoindex.api.SpatialCacheEngine;
 import geoindex.buffer.CacheManager;
 import geoindex.cache.CachePolicy;
 import geoindex.index.GeoHashIndex;
+import geoindex.metric.EngineMetrics;
+import geoindex.metric.MetricsSnapshot;
 import geoindex.storage.DiskManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class SpatialCacheEngineTest {
 
     static final String TEST_FILE = "test_cache_engine.db";
+    EngineMetrics metrics;
     DiskManager diskManager;
     CacheManager cacheManager;
     GeoHashIndex geoHashIndex;
@@ -29,11 +32,12 @@ class SpatialCacheEngineTest {
 
     @BeforeEach
     void setup() {
-        diskManager = new DiskManager(TEST_FILE);
-        cacheManager = new CacheManager(diskManager);
+        metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_FILE, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
         geoHashIndex = new GeoHashIndex();
-        spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex);
-        engine = new SpatialCacheEngine<>(spatialRecordManager);
+        spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
+        engine = new SpatialCacheEngine<>(spatialRecordManager, metrics);
     }
 
     @AfterEach
@@ -105,8 +109,8 @@ class SpatialCacheEngineTest {
         CachePolicy shortTtl = CachePolicy.builder()
                 .ttl(Duration.ofMillis(100))
                 .build();
-        SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex);
-        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl);
+        SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
+        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl, metrics);
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
@@ -198,8 +202,8 @@ class SpatialCacheEngineTest {
     @Test
     void maxSize_초과시_evict() {
         CachePolicy limitedPolicy = CachePolicy.builder().maxSize(2).build();
-        SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex);
-        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy);
+        SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
+        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy, metrics);
 
         limitedEngine.putCache(geoHashIndex.toPageId(37.4979, 127.0276), List.of("A"));
         limitedEngine.putCache(geoHashIndex.toPageId(37.5665, 126.9780), List.of("B"));
@@ -234,5 +238,53 @@ class SpatialCacheEngineTest {
         assertTrue(policy.isMaxSizeEnabled());
         assertEquals(5000, policy.getMaxSize());
         System.out.println("CachePolicy 설정값 확인 ✅");
+    }
+
+    @Test
+    void 메트릭_출력() {
+        // 검색 + 캐시 동작 수행
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        spatialRecordManager.put(37.4985, 127.0280, "B0002".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        // MISS → putCache → HIT 흐름
+        List<PageResult<String>> first = engine.search(37.4979, 127.0276, 5.0);
+        first.stream().filter(r -> !r.isHit())
+                .forEach(r -> engine.putCache(r.getPageId(), List.of("B0001", "B0002")));
+        engine.search(37.4979, 127.0276, 5.0); // HIT
+
+        // 메트릭 출력
+        MetricsSnapshot metricsSnapshot = engine.getMetrics();
+        System.out.printf("""
+        === Engine Metrics ===
+        {
+          "index": {
+            "queryCount": %d,
+            "avgPageIds": %.1f
+          },
+          "cache": {
+            "pageHit": %d,
+            "pageMiss": %d,
+            "pageHitRate": %.3f,
+            "cacheSize": %d,
+            "evictCount": %d
+          },
+          "disk": {
+            "pageReadCount": %d,
+            "pageWriteCount": %d
+          },
+          "storage": {
+            "flushCount": %d,
+            "flushedPages": %d,
+            "dirtyPages": %d
+          }
+        }%n""",
+                metricsSnapshot.queryCount, metricsSnapshot.avgPageIds,
+                metricsSnapshot.pageHit, metricsSnapshot.pageMiss, metricsSnapshot.pageHitRate,
+                metricsSnapshot.cacheSize, metricsSnapshot.evictCount,
+                metricsSnapshot.pageReadCount, metricsSnapshot.pageWriteCount,
+                metricsSnapshot.flushCount, metricsSnapshot.flushedPages, metricsSnapshot.dirtyPages
+        );
     }
 }

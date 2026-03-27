@@ -2,6 +2,7 @@ package geoindex.test;
 
 import geoindex.api.RecordManager;
 import geoindex.buffer.CacheManager;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,8 +24,9 @@ class RecordManagerTest {
 
     @BeforeEach
     void setup(){
-        diskManager = new DiskManager(TEST_FILE);
-        cacheManager = new CacheManager(diskManager);
+        EngineMetrics metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_FILE, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
         recordManager = new RecordManager(cacheManager);
     }
     @AfterEach

@@ -3,6 +3,7 @@ package geoindex.test;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.index.GeoHashIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,9 +25,10 @@ class SpatialRecordManagerTest {
 
     @BeforeEach
     void setup() {
-        diskManager = new DiskManager(TEST_FILE);
-        cacheManager = new CacheManager(diskManager);
-        manager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
+        EngineMetrics metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_FILE, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
+        manager = new SpatialRecordManager(cacheManager, new GeoHashIndex(), metrics);
     }
 
     @AfterEach

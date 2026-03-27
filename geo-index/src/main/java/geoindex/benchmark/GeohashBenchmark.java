@@ -3,6 +3,7 @@ package geoindex.benchmark;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.index.GeoHashIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.util.GeoUtils;
 
@@ -22,9 +23,10 @@ public class GeohashBenchmark {
         try {
             List<Hospital> hospitals = generateDummyList(count);
 
-            diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
-            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
+            EngineMetrics metrics = new EngineMetrics();
+            diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
+            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex(), metrics);
 
             for (Hospital hospital : hospitals) {
                 spatialRecordManager.put(hospital.coordinateY, hospital.coordinateX, Hospital.toBytes(hospital));
@@ -62,9 +64,10 @@ public class GeohashBenchmark {
             List<Hospital> hospitals = generateDummyList(79081);
             System.out.println("generating " + hospitals.size() + " dummy data");
 
-            diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
-            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex());
+            EngineMetrics metrics = new EngineMetrics();
+            diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
+            SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex(), metrics);
 
             long startTime = System.currentTimeMillis();
             for (Hospital hospital : hospitals) {

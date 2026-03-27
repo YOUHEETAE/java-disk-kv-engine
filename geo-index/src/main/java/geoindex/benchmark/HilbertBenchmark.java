@@ -3,6 +3,7 @@ package geoindex.benchmark;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.index.HilbertIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.util.GeoUtils;
 
@@ -21,9 +22,10 @@ public class HilbertBenchmark {
         try {
             List<Hospital> hospitals = generateDummyList(count);
 
-            DiskManager diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
-            SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new HilbertIndex());
+            EngineMetrics metrics = new EngineMetrics();
+            DiskManager diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
+            SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new HilbertIndex(), metrics);
 
             for (Hospital hospital : hospitals) {
                 manager.put(hospital.coordinateY, hospital.coordinateX, Hospital.toBytes(hospital));
@@ -59,9 +61,10 @@ public class HilbertBenchmark {
             List<Hospital> hospitals = generateDummyList(79081);
             System.out.println("generating " + hospitals.size() + " dummy data");
 
-            DiskManager diskManager = new DiskManager(TEST_DB);
-            cacheManager = new CacheManager(diskManager);
-            SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new HilbertIndex());
+            EngineMetrics metrics = new EngineMetrics();
+            DiskManager diskManager = new DiskManager(TEST_DB, metrics);
+            cacheManager = new CacheManager(diskManager, metrics);
+            SpatialRecordManager manager = new SpatialRecordManager(cacheManager, new HilbertIndex(), metrics);
 
             long startTime = System.currentTimeMillis();
             for (Hospital hospital : hospitals) {

@@ -3,6 +3,7 @@ package geoindex.concurrency;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.index.GeoHashIndex;
+import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,10 +32,11 @@ public class ConcurrencyTest {
 
     @BeforeEach
     void setup() {
-        diskManager = new DiskManager(TEST_DB);
-        cacheManager = new CacheManager(diskManager);
+        EngineMetrics metrics = new EngineMetrics();
+        diskManager = new DiskManager(TEST_DB, metrics);
+        cacheManager = new CacheManager(diskManager, metrics);
         geoHashIndex = new GeoHashIndex();
-        srm = new SpatialRecordManager(cacheManager, geoHashIndex);
+        srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
     }
 
     @AfterEach

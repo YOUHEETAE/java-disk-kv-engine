@@ -1,19 +1,23 @@
 package geoindex.cache;
 
 import geoindex.api.PageResult;
+import geoindex.metric.EngineMetrics;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 public class PageCacheStore<T> {
     private final CachePolicy policy;
     private volatile ConcurrentHashMap<Integer, CacheEntry<T>> pageCache;
+    private final EngineMetrics engineMetrics;
 
-    public PageCacheStore(CachePolicy policy) {
+    public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics) {
         this.policy = policy;
         this.pageCache = new ConcurrentHashMap<>();
+        this.engineMetrics = engineMetrics;
     }
     /**
      * pageId → HIT이면 캐시 데이터, MISS이면 codes 반환
@@ -25,6 +29,7 @@ public class PageCacheStore<T> {
         CacheEntry<T> cached = pageCache.get(pageId);
 
         if (cached != null && !cached.isExpired()) {
+            engineMetrics.incrementPageHit();
             return PageResult.hit(pageId, cached.getData());
         }
 
@@ -32,6 +37,7 @@ public class PageCacheStore<T> {
         if (cached != null) {
             pageCache.remove(pageId);
         }
+        engineMetrics.incrementPageMiss();
         return PageResult.miss(pageId, codes);
     }
 
@@ -78,6 +84,7 @@ public class PageCacheStore<T> {
 
 
     private void evictOne() {
+        engineMetrics.incrementEvictCount();
         Integer victim = pageCache.keys().nextElement();
         if (victim != null) {
             pageCache.remove(victim);
