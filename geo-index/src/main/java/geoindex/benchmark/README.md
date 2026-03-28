@@ -49,7 +49,7 @@
 ```
 Full Scan 평균:      65ms   (MariaDB WHERE BETWEEN + JOIN)
 GeoIndex 총 평균:    60ms
-  └ MiniDB 탐색:      0ms   (187 pageId → hospital_code 후보 추출)
+  └ MiniDB 탐색:      < 1ms (187 pageId → hospital_code 후보 추출)
   └ MariaDB IN 쿼리:  60ms  (WHERE hospital_code IN (...))
 후보 감소: 79,081건 → 1,366건 (98.3% 감소)
 ```
@@ -62,7 +62,7 @@ MariaDB 버퍼풀이 79,081건을 전부 메모리에 상주
 → GeoIndex의 IN(1,366건) 쿼리 오버헤드 ≈ Full Scan BETWEEN 비용
 
 GeoIndex의 실제 기여:
-  MiniDB 탐색 0ms + 후보 98.3% 감소
+  MiniDB 탐색 < 1ms + 후보 98.3% 감소
   → 캐시 계층의 캐시 키(pageId) 역할
   → 데이터 폭증 시 Full Scan O(N) vs GeoIndex O(P) 격차 폭발
 ```

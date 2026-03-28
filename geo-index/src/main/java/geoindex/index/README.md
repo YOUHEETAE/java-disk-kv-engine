@@ -205,7 +205,7 @@ Hilbert:   pageId  13개 ← 힐버트의 진짜 강점
 |------|---------|---------|
 | **pageId 수** | 187개 | 13개 |
 | **후보 수** | 1,366건 | 103건 |
-| **검색 시간** | 0ms | 33~37ms |
+| **검색 시간** | < 1ms | 33~37ms |
 | **getPageIds 연산** | 187번 | 671만 번 |
 | **interval 수** | 분산 | 5개 |
 | **Seek Count** | 720 | 124 |
@@ -216,7 +216,7 @@ Hilbert:   pageId  13개 ← 힐버트의 진짜 강점
 GeoHash:  연산 적음 → 빠름 / pageId 많음 → I/O 많음
 Hilbert:  연산 많음 → 느림 / pageId 적음 → I/O 최소
 
-SSD 소규모 환경:  GeoHash 유리 (0ms vs 33ms)
+SSD 소규모 환경:  GeoHash 유리 (< 1ms vs 33ms)
 HDD 대용량 환경:  Hilbert 유리 (pageId 13개 × 순차 I/O)
 ```
 

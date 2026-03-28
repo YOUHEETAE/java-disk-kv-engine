@@ -12,7 +12,7 @@ pageId 단위 JVM 캐시 인프라 — Spring 없이 순수 Java 제네릭으로
   MISS → MariaDB 조회 → Redis 저장 → 재반환
 
 이 모듈:
-  요청 → ConcurrentHashMap.get(pageId) → 나노초
+  요청 → LinkedHashMap.get(pageId) → 나노초
   MISS → MariaDB 조회 → JVM 메모리 저장 → 재반환
   네트워크 왕복 없음, 외부 인프라 불필요
 ```
@@ -51,8 +51,8 @@ CacheEntry.of(data, expiresAt)   // TTL 있음
 
 ### PageCacheStore\<T\>
 
-pageId 단위 ConcurrentHashMap 캐시 인프라.
-TTL 만료 체크, maxSize 초과 시 evict, clearCache를 담당합니다.
+pageId 단위 LRU 캐시 인프라.
+TTL 만료 체크, maxSize 초과 시 LRU evict, clearCache를 담당합니다.
 
 ```java
 PageResult<T> getOrMiss(int pageId, List<String> codes)
@@ -65,16 +65,15 @@ CachePolicy getPolicy()
 
 **getOrMiss(pageId, codes):**
 ```
-pageCache.get(pageId)
+pageCache.get(pageId)             ← LinkedHashMap access-order → 접근 시 tail로 이동 (LRU 갱신)
   → null 또는 isExpired() → pageCache.remove(pageId) → PageResult.miss(pageId, codes)
   → 유효 → PageResult.hit(pageId, cached)
 ```
 
 **put(pageId, List\<T\>):**
 ```
-pageCache.put(pageId, CacheEntry.of(data))
-  → ConcurrentHashMap.put() → atomic 덮어쓰기
-  → maxSize 초과 시 evictOne()
+maxSize 초과 시 → evictOne() (LRU head = 가장 오래전 접근 항목 제거)
+pageCache.put(pageId, CacheEntry.of(data)) → 덮어쓰기
 
 덮어쓰기를 선택한 이유:
   같은 pageId = 같은 DB 조회 = 같은 데이터
@@ -85,17 +84,47 @@ pageCache.put(pageId, CacheEntry.of(data))
 
 **clearCache():**
 ```
-this.pageCache = new ConcurrentHashMap<>()  ← volatile write (atomic 교체)
-기존 Map → 참조 끊김 → GC 대상
-rebuild() 중 다른 스레드 → volatile read → 기존 Map 계속 읽음 → 중단 없음
+pageCache.clear()  ← 내용물만 비움 (참조는 final로 고정)
 ```
 
 ---
 
 ## Thread-safety
 
-`put()`은 `synchronized`로 보호됨. maxSize 체크와 실제 put 사이의 race condition 방지 — maxSize 초과 시 evictOne() 후 저장.
+모든 공개 메서드(`getOrMiss`, `put`, `clearCache`, `isCached`, `getCacheSize`)가 `synchronized`로 보호됨.
+
+`LinkedHashMap`은 thread-safe하지 않으며, access-order 모드에서 `get()` 호출 시 내부 순서가 변경된다. 읽기(`getOrMiss`)도 순서를 변경하므로 `synchronized` 없이는 동시 접근 시 구조가 손상될 수 있다.
+
+`put()`의 `synchronized`는 추가로 maxSize 체크 → evict → put의 원자성을 보장한다.
 → [CONCURRENCY.md Bug 9 참고](../../../../../CONCURRENCY.md)
+
+---
+
+## LRU eviction
+
+```java
+// LinkedHashMap(initialCapacity, loadFactor, accessOrder=true)
+private final LinkedHashMap<Integer, CacheEntry<T>> pageCache = new LinkedHashMap<>(16, 0.75f, true);
+
+// evictOne: head = 가장 오래전에 접근한 항목
+private void evictOne() {
+    Integer victim = pageCache.keySet().iterator().next();
+    pageCache.remove(victim);
+}
+```
+
+`accessOrder=true`로 생성된 LinkedHashMap은 `get()` 호출 시 해당 항목을 tail로 이동시킨다.
+→ iterator().next()는 항상 가장 오래전에 접근한 항목(LRU)을 반환한다.
+
+```
+초기: [강남, 강북, 홍대]
+강남 getOrMiss() 호출 →
+이후: [강북, 홍대, 강남]  ← 강남 tail로 이동
+evict → 강북 제거 (head = 가장 오래전 접근)
+```
+
+현재 기본값은 maxSize UNLIMITED이므로 eviction은 발생하지 않는다.
+→ 핫스팟 pageId가 절대 날아가지 않음
 
 ---
 
@@ -173,13 +202,14 @@ pageId 전체 저장 → 반경 밖 데이터 포함 가능
 → 스토어는 저장/조회만 담당
 ```
 
-### ConcurrentHashMap + 덮어쓰기
+### LinkedHashMap + synchronized
 
 ```
 멀티스레드 환경 (Spring 요청 동시 처리)
-→ ConcurrentHashMap.put() → 세그먼트 락으로 atomic 덮어쓰기 보장
-→ 읽기는 락 없이 동시 실행 가능
-→ Thundering Herd 시 중복 데이터 쌓임 방지
+→ LinkedHashMap은 thread-safe하지 않음
+→ 모든 메서드 synchronized로 직렬화
+→ access-order LRU로 핫스팟 pageId 보호
+→ Thundering Herd 시 중복 데이터 덮어쓰기로 정합성 보장
 ```
 
 ---
@@ -191,8 +221,8 @@ JVM 프로세스 종료 = 캐시 초기화
   → 재시작 시 Warm-up 필요 (Lazy 방식으로 자연스럽게 채워짐)
 
 동시성 안전:
-  ConcurrentHashMap → put/get 동시 실행 안전
-  clearCache() volatile write → rebuild 중 기존 캐시 유지
+  synchronized → 모든 메서드 직렬화
+  clearCache() → pageCache.clear()로 내용물 제거 (final 참조 유지)
 
 미구현:
   Thundering Herd 완전 방지 (동시 MISS → 중복 DB 조회 허용)

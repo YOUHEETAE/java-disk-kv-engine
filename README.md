@@ -14,17 +14,51 @@
 위치 기반 병원 검색 서비스에서 반경 기반 거리 조회(Radius Query) 성능 저하 문제를 경험했습니다.
 
 ```
-문제 1: MariaDB SPATIAL INDEX
-  서비스 환경의 쿼리 패턴에서 MBRContains 공간 연산 오버헤드로
-  기대만큼의 성능 개선을 얻지 못함 (30–50ms)
+시도 1: MariaDB SPATIAL INDEX (MBRContains)
+  LEFT JOIN 환경에서 공간 연산 오버헤드로 인해
+  옵티마이저가 인덱스 대신 Full Scan을 선택 (30~50ms)
+  FORCE INDEX 강제 시: 23,000 스캔 / 1,000 반환 = 23배 비효율
 
-문제 2: Redis Geohash 캐싱
-  외부 인프라 의존성 + 네트워크 왕복 지연 (29–124ms)
+시도 2: 복합 인덱스 (coordinate_x, coordinate_y)
+  경도 범위만으로는 선택도 29% → 랜덤 I/O 비용 > Full Scan 비용
+  JOIN 환경에서 옵티마이저가 인덱스를 포기 → Full Scan
 
+결론: 7만 건 + JOIN 환경에서 DB 공간 인덱스는 효과 없음
+  → Full Scan + BETWEEN이 오히려 최적 (30~50ms)
+
+시도 3: Redis Geohash 캐싱
+  DB 조회는 줄였으나 네트워크 왕복 지연 (29~124ms)
+  캐시 조회 자체가 느리면 캐싱의 의미가 반감됨
+```
+
+**근본 문제**: 공간 인덱스가 DB 안에서 동작하지 않는다면, DB 밖에서 직접 구현해야 한다.
+
+```
 해결: 커스텀 Geohash 공간 인덱스 엔진 (MiniDB) 직접 구현
-  → 반경 검색 후보 98.3% 감소 (79,081건 → 1,366건)
+  → GeoHash pageId 클러스터링으로 "같은 지역 = 같은 캐시 키" 보장
+  → 네트워크 왕복 없이 JVM 내부에서 공간 인덱스 처리
+  → pageId 단위 JVM 캐시로 DB 접근 제거
   → JVM 캐시 결합 시 최대 46.8x 성능 개선
 ```
+
+**왜 순수 Java 엔진으로 분리했는가:**
+
+GeoHash Morton 코드 계산, pageId 클러스터링, Page 슬롯 구조 등 공간 인덱스 구현 세부사항을 Spring 서비스에서 격리하기 위해서다. Spring은 `search() / putCache() / rebuild()` 세 가지만 알면 되고, 내부 인덱스 구현이 바뀌어도 서비스 코드는 변경이 없다.
+
+---
+
+## 핵심 인사이트
+
+> Spatial Index 자체는 DB 쿼리 성능을 크게 개선하지 않을 수 있다.
+>
+> 실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
+> Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
+>
+> 하지만 Spatial Index가 제공하는 pageId는
+> **"같은 지역 = 같은 pageId"** 라는 캐시 키가 된다.
+>
+> pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
+> **→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.**
 
 ---
 
@@ -114,13 +148,13 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 
 ```
 첫 요청:
-  MiniDB → pageId 목록 반환 (0ms)
+  MiniDB → pageId 목록 반환 (< 1ms)
   pageId별 캐시 확인 → MISS
   MariaDB → 전체 데이터 조회
   결과 → putCache() → JVM 캐시 저장
 
 두 번째 요청 (같은 반경):
-  MiniDB → pageId 목록 반환 (0ms)
+  MiniDB → pageId 목록 반환 (< 1ms)
   pageId별 캐시 확인 → HIT
   MariaDB 왕복 없음 → 즉시 반환
 ```
@@ -195,7 +229,7 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 ```
 [요청]
   ↓
-[MiniDB] pageId 목록 계산 (0ms)
+[MiniDB] pageId 목록 계산 (< 1ms)
   ↓
 [SpatialCacheService] pageId 캐시 확인
   ├─ HIT → 즉시 반환 (MariaDB 왕복 없음)
@@ -209,6 +243,16 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 → 매주 MiniDB 전체 재빌드 (delete 불필요)
 → 재빌드 중 이전 파일로 서비스 유지 (atomic rename)
 → 완료 후 파일 교체 + JVM 캐시 자동 초기화
+```
+
+**Thundering Herd 방지:**
+```
+rebuild 완료 직후 JVM 캐시가 초기화된 상태에서 트래픽이 몰리면
+동일 pageId에 대해 다수의 동시 MISS → 중복 DB 쿼리 발생 가능
+
+→ rebuild를 트래픽 최저점(새벽 배치)에 실행하면 자연스럽게 방지됨
+   캐시가 비어있는 구간에 동시 요청 자체가 적기 때문
+→ 별도 구현(computeIfAbsent + Future) 없이 운영 스케줄링으로 해결
 ```
 
 ### Spring MVC 연동
@@ -244,23 +288,6 @@ spatialCacheEngine.putCache(pageId, dbResults);   // MISS 후 캐시 저장
 
 ---
 
-## 핵심 인사이트
-
-```
-Spatial Index 자체는 DB 쿼리 성능을 크게 개선하지 않을 수 있다.
-
-실제 서비스에서 MariaDB 버퍼풀이 데이터를 메모리에 상주시키면
-Full Scan과 GeoIndex의 DB 조회 시간 차이는 크지 않다.
-
-하지만 Spatial Index가 제공하는 pageId는
-"같은 지역 = 같은 pageId"라는 캐시 키가 된다.
-
-pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
-→ DB 쿼리를 빠르게 만드는 것이 아니라, DB를 아예 안 보는 것.
-```
-
----
-
 ## 동시성 이슈 해결
 
 ### 왜 이 엔진은 동시성이 특히 중요한가
@@ -287,7 +314,7 @@ pageId 단위로 캐시하면 DB 접근 자체를 제거할 수 있다.
 | 6 | `DiskManager.writePage()` 복합 race → 데이터 손상 | `HashMap`, `nextDataOffset`, `entryCount` 비원자성 | `synchronized` |
 | 7 | `Page.dirty` visibility 문제 → flush 누락 | `volatile` 미선언 | `volatile boolean dirty` |
 | 8 | `CacheManager.flush()` dirty flag race → 변경사항 유실 | isDirty-writePage-clearDirty 비원자성 | `synchronized(page)` |
-| 9 | `PageCacheStore.put()` maxSize 초과 | size 체크와 put 사이 race | `synchronized` |
+| 9 | `PageCacheStore` 동시 접근 → LRU 순서 손상 / maxSize 초과 | `ConcurrentHashMap` → `LinkedHashMap(access-order)` thread-unsafe | 전 메서드 `synchronized` + LRU eviction |
 
 **근본 원인:**
 
@@ -350,7 +377,7 @@ geo-index/
     RecordId.java               레코드 물리 위치 값 객체 (pageId + slotId)
     RecordManager.java          Key-Value 저장
   cache/
-    PageCacheStore.java         ConcurrentHashMap 기반 캐시 인프라
+    PageCacheStore.java         LinkedHashMap LRU 기반 캐시 인프라
     CachePolicy.java            TTL / maxSize 정책
     CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
   index/
@@ -419,7 +446,8 @@ geo-index/
     - DiskManager.readPage() / writePage() → synchronized (RandomAccessFile race 해결)
     - Page.dirty → volatile (스레드 간 visibility 보장)
     - CacheManager.flush() → synchronized(page) (dirty flag race 해결)
-    - PageCacheStore.put() → synchronized (maxSize race 해결)
+    - PageCacheStore ConcurrentHashMap → LinkedHashMap(access-order) + 전 메서드 synchronized (LRU eviction)
+    - DiskManager.rebuild() 실패 시 임시 파일 삭제 + 기존 파일 재오픈 (서비스 연속성 보장)
     - 스레드 500 동시 요청 검증: 데이터 누락 0건 확인
 ✅ Phase 14: 엔진 메트릭 시스템 구현
     - EngineMetrics — AtomicLong 카운터 + Supplier 실시간 조회
@@ -427,6 +455,7 @@ geo-index/
     - 계층별 카운터 주입 (DiskManager / CacheManager / PageCacheStore / SpatialRecordManager)
     - SpatialCacheEngine.getMetrics() — 최상단 메트릭 조회 API
     - GeoIndexMetricsExporter — Micrometer Gauge 등록 → Prometheus / Grafana 연동
+    - overflowPageUsed 메트릭 추가 (핫스팟으로 인한 overflow 페이지 사용량 모니터링)
 ```
 
 ---

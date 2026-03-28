@@ -400,37 +400,42 @@ public void flush() {
 
 ---
 
-### Bug 9. `PageCacheStore.put()` — maxSize check-then-act race
+### Bug 9. `PageCacheStore` — LinkedHashMap 동시 접근
 
 **증상:**
 ```
-캐시 최대 크기(maxSize)를 초과해서 저장됨
-→ 메모리 초과 (심각도는 낮으나 설정한 제약이 무효화됨)
+maxSize 초과 저장, 또는 LRU 순서 손상
+→ 핫스팟 pageId가 evict되거나 캐시 구조 오염
 ```
 
 **원인:**
 
 ```
-cache size = 999, maxSize = 1000
+LinkedHashMap은 thread-safe하지 않다.
+access-order 모드에서 get()은 내부 순서(링크드 리스트)를 변경한다.
 
-Thread A & B: 동시에 pageCache.size() >= 1000 체크 → 둘 다 false
-Thread A: put() 호출 → size = 1000
-Thread B: put() 호출 → size = 1001  ← maxSize 초과!
+Thread A: pageCache.get(pageId_A)  ← 내부 순서 변경 중
+Thread B: pageCache.get(pageId_B)  ← 동시에 내부 순서 변경
+→ 링크드 리스트 포인터 손상 → 구조 오염
+
+put() 단독으로도:
+  Thread A & B: 동시에 size() 체크 → 둘 다 maxSize 미만으로 판정
+  → 둘 다 put() → maxSize 초과
 ```
 
-**해결:** `put()`에 `synchronized` 추가
+**해결:** 모든 공개 메서드에 `synchronized` 추가
 
 ```java
-// Before
-public void put(int pageId, List<T> data) {
-    if (policy.isMaxSizeEnabled() && pageCache.size() >= policy.getMaxSize()) {
-        evictOne();
-    }
-    pageCache.put(pageId, ...);
-}
+// Before — ConcurrentHashMap (읽기 비동기, 쓰기 동기)
+private volatile ConcurrentHashMap<Integer, CacheEntry<T>> pageCache;
+public PageResult<T> getOrMiss(...) { ... }           // 비동기
+public synchronized void put(int pageId, ...) { ... } // 동기
 
-// After — 체크와 put을 원자적 블록으로
-public synchronized void put(int pageId, List<T> data) {
+// After — LinkedHashMap (모든 접근 동기화)
+private final LinkedHashMap<Integer, CacheEntry<T>> pageCache = new LinkedHashMap<>(16, 0.75f, true);
+public synchronized PageResult<T> getOrMiss(...) { ... }  // 동기
+public synchronized void put(int pageId, ...) { ... }     // 동기
+public synchronized void clearCache() { ... }             // 동기
     if (policy.isMaxSizeEnabled() && pageCache.size() >= policy.getMaxSize()) {
         evictOne();
     }
@@ -528,5 +533,5 @@ FullScan: 5765건 | GeoIndex: 5765건 | 일치: true | FS누락: 0건 ✅
 | `storage/DiskManager.java` | `writePage()` → `synchronized` | Bug 6 |
 | `storage/Page.java` | `dirty` → `volatile boolean dirty` | Bug 7 |
 | `buffer/CacheManager.java` | `flush()` → `synchronized(page)` 블록 추가 | Bug 8 |
-| `cache/PageCacheStore.java` | `put()` → `synchronized` | Bug 9 |
+| `cache/PageCacheStore.java` | `ConcurrentHashMap` → `LinkedHashMap(access-order)` + 전 메서드 `synchronized` (LRU eviction) | Bug 9 |
 | `index/GeoHashIndex.java` | `getPageIds()` 경계값 → `Math.min((1L<<15)-1, ...)` | 로직 버그 |
