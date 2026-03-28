@@ -24,27 +24,30 @@ public class MetricsSnapshot {
     public final long   rebuildCount;
     public final long   avgRebuildMs;
     public final int    dirtyPages;
+    public final int    overflowPageUsed;
 
     public MetricsSnapshot(
             long queryCount, double avgPageIds, double avgIntervals,
             long pageHit, long pageMiss, double pageHitRate, int cacheSize, long evictCount,
             long pageReadCount, long pageWriteCount,
-            long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, int dirtyPages
+            long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, int dirtyPages,
+            int overflowPageUsed
     ) {
-        this.queryCount     = queryCount;
-        this.avgPageIds     = avgPageIds;
-        this.avgIntervals   = avgIntervals;
-        this.pageHit        = pageHit;
-        this.pageMiss       = pageMiss;
-        this.pageHitRate    = pageHitRate;
-        this.cacheSize      = cacheSize;
-        this.evictCount     = evictCount;
-        this.pageReadCount  = pageReadCount;
-        this.pageWriteCount = pageWriteCount;
-        this.flushCount     = flushCount;
-        this.flushedPages   = flushedPages;
-        this.rebuildCount   = rebuildCount;
-        this.avgRebuildMs   = avgRebuildMs;
-        this.dirtyPages     = dirtyPages;
+        this.queryCount       = queryCount;
+        this.avgPageIds       = avgPageIds;
+        this.avgIntervals     = avgIntervals;
+        this.pageHit          = pageHit;
+        this.pageMiss         = pageMiss;
+        this.pageHitRate      = pageHitRate;
+        this.cacheSize        = cacheSize;
+        this.evictCount       = evictCount;
+        this.pageReadCount    = pageReadCount;
+        this.pageWriteCount   = pageWriteCount;
+        this.flushCount       = flushCount;
+        this.flushedPages     = flushedPages;
+        this.rebuildCount     = rebuildCount;
+        this.avgRebuildMs     = avgRebuildMs;
+        this.dirtyPages       = dirtyPages;
+        this.overflowPageUsed = overflowPageUsed;
     }
 }

@@ -70,13 +70,14 @@ public class SpatialCacheEngine<T> {
     }
 
     // -------------------------------------------------------------------------
-    // rebuild
+    // metric
     // -------------------------------------------------------------------------
 
     public MetricsSnapshot getMetrics() {
         return engineMetrics.snapshot(
                 (int) pageCacheStore.getCacheSize(),
-                spatialRecordManager.getDirtyPageCount()
+                spatialRecordManager.getDirtyPageCount(),
+                spatialRecordManager.getUsedOverflowPageCount()
         );
     }
 }

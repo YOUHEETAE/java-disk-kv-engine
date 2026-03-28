@@ -4,19 +4,17 @@ import geoindex.api.PageResult;
 import geoindex.metric.EngineMetrics;
 
 import java.time.Instant;
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 
 public class PageCacheStore<T> {
     private final CachePolicy policy;
-    private volatile ConcurrentHashMap<Integer, CacheEntry<T>> pageCache;
+    private final LinkedHashMap<Integer, CacheEntry<T>> pageCache;
     private final EngineMetrics engineMetrics;
 
     public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics) {
         this.policy = policy;
-        this.pageCache = new ConcurrentHashMap<>();
+        this.pageCache = new LinkedHashMap<>(16, 0.75f, true);
         this.engineMetrics = engineMetrics;
     }
     /**
@@ -25,7 +23,7 @@ public class PageCacheStore<T> {
      * SpatialRecordManager.search()에서 pageId + codes를 넘겨주면
      * 캐시 엔진이 HIT/MISS 판단만 담당
      */
-    public PageResult<T> getOrMiss(int pageId, List<String> codes) {
+    public synchronized PageResult<T> getOrMiss(int pageId, List<String> codes) {
         CacheEntry<T> cached = pageCache.get(pageId);
 
         if (cached != null && !cached.isExpired()) {
@@ -65,7 +63,7 @@ public class PageCacheStore<T> {
     // -------------------------------------------------------------------------
 
     public void clearCache() {
-        pageCache = new ConcurrentHashMap<>();
+        pageCache.clear();
     }
 
     // -------------------------------------------------------------------------
@@ -85,10 +83,9 @@ public class PageCacheStore<T> {
 
     private void evictOne() {
         engineMetrics.incrementEvictCount();
-        Integer victim = pageCache.keys().nextElement();
-        if (victim != null) {
-            pageCache.remove(victim);
-        }
+        Integer victim = pageCache.keySet().iterator().next();
+        pageCache.remove(victim);
+
     }
     public CachePolicy getPolicy() {
         return policy;

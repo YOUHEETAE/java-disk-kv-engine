@@ -219,4 +219,8 @@ public class SpatialRecordManager {
     public int getDirtyPageCount() {
         return cacheManager.getDirtyPageCount();
     }
+
+    public int getUsedOverflowPageCount() {
+        return OVERFLOW_PAGES - overflowFreeList.size();
+    }
 }

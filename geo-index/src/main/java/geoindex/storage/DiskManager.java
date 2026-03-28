@@ -122,6 +122,7 @@ public class DiskManager {
     }
     public void rebuild(DiskManagerLoader loader) {
         String tempPath = filePath + ".new";
+        boolean dbFileClosed =  false;
         try {
             // 1. 임시 파일에 새 DiskManager 생성
             DiskManager tempDm = new DiskManager(tempPath, engineMetrics);
@@ -134,6 +135,7 @@ public class DiskManager {
 
             // 4. 기존 파일 닫기
             dbFile.close();
+            dbFileClosed = true;
 
             // 5. atomic rename
             Files.move(
@@ -152,6 +154,17 @@ public class DiskManager {
             loadPageMap();
 
         } catch (IOException e) {
+            try{
+                Files.deleteIfExists(Path.of(tempPath));
+            } catch (IOException Ignored) {}
+
+            if (dbFileClosed){
+                try{
+                dbFile = new RandomAccessFile(filePath, "rw");
+                } catch (IOException reOpenEx) {
+                    throw new RuntimeException("reOpen failed", reOpenEx);
+                }
+            }
             throw new RuntimeException("DiskManager rebuild failed", e);
         }
     }

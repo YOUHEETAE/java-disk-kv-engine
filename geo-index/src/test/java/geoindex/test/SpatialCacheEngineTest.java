@@ -278,13 +278,15 @@ class SpatialCacheEngineTest {
             "flushCount": %d,
             "flushedPages": %d,
             "dirtyPages": %d
+            "overflowPageUsed": %d
           }
         }%n""",
                 metricsSnapshot.queryCount, metricsSnapshot.avgPageIds,
                 metricsSnapshot.pageHit, metricsSnapshot.pageMiss, metricsSnapshot.pageHitRate,
                 metricsSnapshot.cacheSize, metricsSnapshot.evictCount,
                 metricsSnapshot.pageReadCount, metricsSnapshot.pageWriteCount,
-                metricsSnapshot.flushCount, metricsSnapshot.flushedPages, metricsSnapshot.dirtyPages
+                metricsSnapshot.flushCount, metricsSnapshot.flushedPages, metricsSnapshot.dirtyPages,
+                metricsSnapshot.overflowPageUsed
         );
     }
 }
