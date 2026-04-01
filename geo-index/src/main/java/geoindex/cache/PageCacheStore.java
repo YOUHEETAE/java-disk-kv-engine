@@ -11,12 +11,18 @@ public class PageCacheStore<T> {
     private final CachePolicy policy;
     private final LinkedHashMap<Integer, CacheEntry<T>> pageCache;
     private final EngineMetrics engineMetrics;
+    private final WarmupStore warmupStore;
 
-    public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics) {
+    public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics,  WarmupStore warmupStore) {
         this.policy = policy;
         this.pageCache = new LinkedHashMap<>(16, 0.75f, true);
         this.engineMetrics = engineMetrics;
+        this.warmupStore = warmupStore;
     }
+    public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics) {
+        this(policy, engineMetrics, null);
+    }
+
     /**
      * pageId → HIT이면 캐시 데이터, MISS이면 codes 반환
      *
@@ -25,6 +31,7 @@ public class PageCacheStore<T> {
      */
     public synchronized PageResult<T> getOrMiss(int pageId, List<String> codes) {
         CacheEntry<T> cached = pageCache.get(pageId);
+        if(warmupStore != null) warmupStore.recordAccess(pageId);
 
         if (cached != null && !cached.isExpired()) {
             engineMetrics.incrementPageHit();

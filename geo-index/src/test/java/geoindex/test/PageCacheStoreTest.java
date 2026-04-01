@@ -14,7 +14,7 @@ class PageCacheStoreTest {
 
     @Test
     void put_후_HIT() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), null);
 
         store.put(100, List.of("H001", "H002", "H003"));
 

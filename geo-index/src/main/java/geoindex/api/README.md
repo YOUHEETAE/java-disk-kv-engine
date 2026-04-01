@@ -48,6 +48,9 @@ void clearCache()
 boolean isCached(int pageId)
 long getCacheSize()
 CachePolicy getPolicy()
+
+List<Integer> getWarmupCandidates(int n)
+void persistWarmup()
 ```
 
 | 메서드 | 반환 | 용도 |
@@ -58,6 +61,20 @@ CachePolicy getPolicy()
 | `clearCache` | void | JVM 캐시만 초기화 |
 | `isCached` | boolean | 특정 pageId 캐시 여부 확인 |
 | `getCacheSize` | long | 현재 캐시 항목 수 |
+| `getWarmupCandidates` | `List<Integer>` | 히트 횟수 Top N pageId 반환 (Spring 워밍업용) |
+| `persistWarmup` | void | 히트 카운트 디스크 저장 (Spring @PreDestroy용) |
+
+**생성자:**
+```java
+// 기본 — WarmupStore 없음
+new SpatialCacheEngine<>(srm, metrics)
+
+// CachePolicy 커스텀
+new SpatialCacheEngine<>(srm, cachePolicy, metrics)
+
+// 풀 옵션 — WarmupStore 포함
+new SpatialCacheEngine<>(srm, cachePolicy, metrics, warmupStore)
+```
 
 ---
 

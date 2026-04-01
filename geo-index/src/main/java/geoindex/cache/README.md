@@ -149,11 +149,12 @@ pageCacheStore.clearCache();         // rebuild() 시 JVM 캐시 초기화
 
 ```
 cache/
-  PageCacheStore  ← CachePolicy, CacheEntry 의존
+  PageCacheStore  ← CachePolicy, CacheEntry, WarmupStore 의존
+  WarmupStore     ← 의존성 없음 (순수 Java I/O)
   CachePolicy     ← 의존성 없음
   CacheEntry      ← 의존성 없음
 
-SpatialCacheEngine (api/) → PageCacheStore (단방향)
+SpatialCacheEngine (api/) → PageCacheStore, WarmupStore (단방향)
 PageCacheStore → SpatialRecordManager 없음 (순환 참조 없음) ✅
 ```
 
@@ -214,11 +215,51 @@ pageId 전체 저장 → 반경 밖 데이터 포함 가능
 
 ---
 
+## WarmupStore
+
+재시작/rebuild 후 JVM 캐시가 비어있을 때, 과거 히트 히스토리 기반으로 Top N pageId를 미리 캐시에 올릴 수 있도록 지원합니다.
+
+```java
+long getHitCount(int pageId)          // pageId별 누적 접근 횟수
+List<Integer> getTopPageIds(int n)    // 히트 횟수 내림차순 Top N
+void recordAccess(int pageId)         // 접근 시 카운트 증가
+void persist()                        // 히트 카운트 파일에 저장
+```
+
+**설계 원칙:**
+```
+pageId별 접근 카운트 → ConcurrentHashMap<Integer, AtomicLong>
+파일 포맷: "pageId count" (한 줄에 하나)
+재시작 시 생성자에서 자동 load() → 히스토리 복원
+persist() 실패는 무시 → 엔진 동작에 영향 없음
+rebuild 후 hitCounts 초기화 안 함 → 과거 히스토리가 워밍업 핵심
+```
+
+**워밍업 흐름 (Spring 담당):**
+```
+서버 시작 @PostConstruct
+  → spatialCacheEngine.getWarmupCandidates(50)  // Top 50 pageId
+  → hospitalRepo.findByPageId(pageId)            // DB 조회
+  → spatialCacheEngine.putCache(pageId, data)    // JVM 캐시 적재
+
+서버 종료 @PreDestroy
+  → spatialCacheEngine.persistWarmup()           // 히트 카운트 저장
+```
+
+**Thread-safety:**
+```
+recordAccess → computeIfAbsent + AtomicLong.incrementAndGet() → 원자적
+getTopPageIds → 스냅샷 정렬 → 읽기 전용 → 별도 동기화 불필요
+persist → 순간 스냅샷 기록 → 정확한 순간 값 보장 불필요
+```
+
+---
+
 ## 제약사항
 
 ```
 JVM 프로세스 종료 = 캐시 초기화
-  → 재시작 시 Warm-up 필요 (Lazy 방식으로 자연스럽게 채워짐)
+  → 재시작 시 WarmupStore.getTopPageIds()로 Top 50 pageId 선제 적재
 
 동시성 안전:
   synchronized → 모든 메서드 직렬화

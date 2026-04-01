@@ -1,8 +1,8 @@
 package geoindex.api;
 
-import geoindex.cache.CacheEntry;
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.cache.WarmupStore;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
 
@@ -15,16 +15,24 @@ public class SpatialCacheEngine<T> {
     private final SpatialRecordManager spatialRecordManager;
     private final PageCacheStore<T> pageCacheStore;
     private final EngineMetrics engineMetrics;
+    private final WarmupStore warmupStore;
 
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, EngineMetrics engineMetrics) {
-        this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics);
+        this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics, null);
     }
 
-    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, CachePolicy cachePolicy, EngineMetrics engineMetrics) {
+    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, CachePolicy cachePolicy, EngineMetrics engineMetrics,  WarmupStore warmupStore) {
         this.spatialRecordManager = spatialRecordManager;
         this.engineMetrics = engineMetrics;
-        this.pageCacheStore = new PageCacheStore<>(cachePolicy, engineMetrics);
+        this.pageCacheStore = new PageCacheStore<>(cachePolicy, engineMetrics, warmupStore);
+        this.warmupStore = warmupStore;
     }
+
+    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager,
+                              CachePolicy cachePolicy, EngineMetrics engineMetrics) {
+        this(spatialRecordManager, cachePolicy, engineMetrics, null);
+    }
+
 
     // -------------------------------------------------------------------------
     // search() — pageId 조회 + HIT/MISS 판단 위임
@@ -80,4 +88,14 @@ public class SpatialCacheEngine<T> {
                 spatialRecordManager.getUsedOverflowPageCount()
         );
     }
+
+    public List<Integer> getWarmupCandidates(int n) {
+        return warmupStore.getTopPageIds(n);
+    }
+
+    public void persistWarmup() {
+        warmupStore.persist();
+    }
+
+
 }

@@ -456,6 +456,13 @@ geo-index/
     - SpatialCacheEngine.getMetrics() — 최상단 메트릭 조회 API
     - GeoIndexMetricsExporter — Micrometer Gauge 등록 → Prometheus / Grafana 연동
     - overflowPageUsed 메트릭 추가 (핫스팟으로 인한 overflow 페이지 사용량 모니터링)
+✅ Phase 15: 캐시 워밍업 구현
+    - WarmupStore — pageId별 접근 횟수 추적 (ConcurrentHashMap + AtomicLong)
+    - persist() / load() — 히트 카운트 디스크 영속 (재시작 후 히스토리 복원)
+    - getTopPageIds(n) — 히트 횟수 내림차순 Top N 반환
+    - PageCacheStore 연동 — getOrMiss() 시 recordAccess() 호출
+    - SpatialCacheEngine.getWarmupCandidates() / persistWarmup() — Spring 연동 API
+    - Spring @PostConstruct 워밍업 / @PreDestroy persist 흐름 설계
 ```
 
 ---
