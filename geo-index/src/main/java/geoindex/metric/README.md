@@ -59,7 +59,7 @@ void addIntervals(int count)
 void addRebuildMs(long ms)
 
 // SpatialCacheEngine에서만 호출
-MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed)
+MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed, int usedPageCount)
 ```
 
 **snapshot() 설계:**
@@ -71,7 +71,8 @@ MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed)
 return engineMetrics.snapshot(
     (int) pageCacheStore.getCacheSize(),
     spatialRecordManager.getDirtyPageCount(),
-    spatialRecordManager.getUsedOverflowPageCount()
+    spatialRecordManager.getUsedOverflowPageCount(),
+    spatialRecordManager.getUsedPageCount()
 );
 ```
 
@@ -105,6 +106,7 @@ long   rebuildCount
 long   avgRebuildMs      // totalRebuildMs / rebuildCount
 int    dirtyPages
 int    overflowPageUsed  // 현재 사용 중인 overflow 페이지 수 (핫스팟 모니터링용)
+int    usedPageCount     // 실제 디스크에 데이터가 기록된 pageId 수
 ```
 
 ---

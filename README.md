@@ -170,6 +170,26 @@ spatialRecordManager.rebuild(srm ->
 → 요청 중단 없음
 ```
 
+### 캐시 워밍업
+
+```
+문제: 재시작 / rebuild 후 JVM 캐시 초기화
+  → 모든 요청 MISS → DB 왕복 폭증 (cold start)
+
+해결: WarmupStore — pageId별 접근 횟수를 디스크에 영속
+  서버 운영 중 → pageId 접근 횟수 누적
+  종료 시      → warmup.store 파일에 저장
+  재시작 시    → Top N pageId DB 조회 → JVM 캐시 선제 적재
+               → 첫 요청부터 HIT 가능
+```
+
+```
+효과:
+  핫스팟 pageId 3,000개 워밍업 → 16,000건 병원 데이터 선적재
+  → 서울/수도권 요청 대부분 cold start 없이 즉시 HIT
+  → rebuild 후에도 동일하게 워밍업 재실행
+```
+
 ---
 
 ## 성능 결과
@@ -380,6 +400,10 @@ geo-index/
     PageCacheStore.java         LinkedHashMap LRU 기반 캐시 인프라
     CachePolicy.java            TTL / maxSize 정책
     CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
+    WarmupStore.java            pageId별 접근 횟수 추적 + 디스크 영속
+  metric/
+    EngineMetrics.java          AtomicLong 카운터 저장소 (전 레이어 공유)
+    MetricsSnapshot.java        특정 시점 불변 메트릭 DTO
   index/
     SpatialIndex.java       인터페이스
     GeoHash.java            Morton 코드 인코딩 (toMorton / interleave)
@@ -461,8 +485,16 @@ geo-index/
     - persist() / load() — 히트 카운트 디스크 영속 (재시작 후 히스토리 복원)
     - getTopPageIds(n) — 히트 횟수 내림차순 Top N 반환
     - PageCacheStore 연동 — getOrMiss() 시 recordAccess() 호출
-    - SpatialCacheEngine.getWarmupCandidates() / persistWarmup() — Spring 연동 API
-    - Spring @PostConstruct 워밍업 / @PreDestroy persist 흐름 설계
+    - SpatialCacheEngine.getWarmupCandidates() / getWarmupTargets() / persistWarmup() — Spring 연동 API
+    - Spring @PostConstruct 비동기 워밍업 / @PreDestroy persist 흐름 설계
+    - IN 쿼리 청크(1000건) 분할로 DB 연결 타임아웃 방지
+✅ Phase 16: usedPageCount 메트릭 추가
+    - DiskManager.getUsedPageCount() — pageMap.size() 기반 실제 사용 pageId 수
+    - CacheManager / SpatialRecordManager 경유 노출
+    - MetricsSnapshot.usedPageCount 필드 추가
+⬜ Phase 17: Thundering Herd 방지
+    - rebuild 완료 직후 동시 MISS → 중복 DB 쿼리 문제
+    - computeIfAbsent + CompletableFuture 조합으로 동일 pageId 중복 조회 차단
 ```
 
 ---
