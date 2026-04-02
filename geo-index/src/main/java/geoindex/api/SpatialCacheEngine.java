@@ -11,7 +11,10 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+<<<<<<< HEAD
 import java.util.function.Function;
+=======
+>>>>>>> 3e4dcfc (feat: getWarmupTargets() 추가 및 WarmupStore 경고 로그 추가)
 import java.util.stream.Collectors;
 
 public class SpatialCacheEngine<T> {
@@ -192,8 +195,20 @@ public class SpatialCacheEngine<T> {
         );
     }
 
+    // -------------------------------------------------------------------------
+    // warmup
+    // -------------------------------------------------------------------------
+
     public List<Integer> getWarmupCandidates(int n) {
         return warmupStore.getTopPageIds(n);
+    }
+
+    public Map<Integer, List<String>> getWarmupTargets(int n) {
+        return warmupStore.getTopPageIds(n).stream()
+                .collect(Collectors.toMap(
+                        pageId -> pageId,
+                        spatialRecordManager::getAllCodesByPageId
+                ));
     }
 
     public void persistWarmup() {
