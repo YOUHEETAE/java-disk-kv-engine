@@ -8,6 +8,7 @@ import geoindex.metric.MetricsSnapshot;
 
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 public class SpatialCacheEngine<T> {
 
@@ -89,8 +90,20 @@ public class SpatialCacheEngine<T> {
         );
     }
 
+    // -------------------------------------------------------------------------
+    // warmup
+    // -------------------------------------------------------------------------
+
     public List<Integer> getWarmupCandidates(int n) {
         return warmupStore.getTopPageIds(n);
+    }
+
+    public Map<Integer, List<String>> getWarmupTargets(int n) {
+        return warmupStore.getTopPageIds(n).stream()
+                .collect(Collectors.toMap(
+                        pageId -> pageId,
+                        spatialRecordManager::getAllCodesByPageId
+                ));
     }
 
     public void persistWarmup() {

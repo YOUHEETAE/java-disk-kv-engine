@@ -11,11 +11,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class WarmupStore {
     private final Path storePath;
     private final ConcurrentHashMap<Integer, AtomicLong> hitCounts;
+    private static final Logger log = Logger.getLogger(WarmupStore.class.getName());
+
 
     public WarmupStore(Path storePath) {
         this.storePath = storePath;
@@ -42,7 +45,9 @@ public class WarmupStore {
                 writer.write(entry.getKey() + " " + entry.getValue().get());
                 writer.newLine();
             }
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            log.warning("[WarmupStore] persist 실패: " + e.getMessage());
+        }
     }
 
     private void load(){
@@ -57,7 +62,9 @@ public class WarmupStore {
                     hitCounts.put(pageId, new AtomicLong(hitCount));
                 }
             }
-        } catch(IOException ignored) {}
+        } catch(IOException e) {
+            log.warning("[WarmupStore] load 실패, fresh start로 동작: " + e.getMessage());
+        }
     }
 
     public long getHitCount(int pageId){
