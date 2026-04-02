@@ -169,6 +169,11 @@ public class DiskManager {
         }
     }
 
+    public int getUsedPageCount() {
+        return pageMap.size();
+    }
+
+
     @FunctionalInterface
     public interface DiskManagerLoader {
         void load(DiskManager dm);

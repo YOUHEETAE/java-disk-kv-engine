@@ -17,6 +17,7 @@ public class MetricsSnapshot {
     // Disk
     public final long   pageReadCount;
     public final long   pageWriteCount;
+    public final int    usedPageCount;
 
     // Storage
     public final long   flushCount;
@@ -31,7 +32,7 @@ public class MetricsSnapshot {
             long pageHit, long pageMiss, double pageHitRate, int cacheSize, long evictCount,
             long pageReadCount, long pageWriteCount,
             long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, int dirtyPages,
-            int overflowPageUsed
+            int overflowPageUsed, int usedPageCount
     ) {
         this.queryCount       = queryCount;
         this.avgPageIds       = avgPageIds;
@@ -49,5 +50,6 @@ public class MetricsSnapshot {
         this.avgRebuildMs     = avgRebuildMs;
         this.dirtyPages       = dirtyPages;
         this.overflowPageUsed = overflowPageUsed;
+        this.usedPageCount = usedPageCount;
     }
 }

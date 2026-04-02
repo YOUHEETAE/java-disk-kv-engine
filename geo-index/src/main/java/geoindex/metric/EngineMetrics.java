@@ -40,7 +40,7 @@ public class EngineMetrics {
     public void addRebuildMs(long ms)      { totalRebuildMs.addAndGet(ms); }
     public void addIntervals(int count)    { totalIntervals.addAndGet(count); }
 
-    public MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed) {
+    public MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed, int usedPageCount) {
         long qCount    = queryCount.get();
         long hitCount  = pageHit.get();
         long missCount = pageMiss.get();
@@ -67,7 +67,8 @@ public class EngineMetrics {
                 rCount,
                 rCount > 0 ? totalRebuildMs.get() / rCount : 0,
                 dirtyPages,
-                overflowPageUsed
+                overflowPageUsed,
+                usedPageCount
         );
     }
 }

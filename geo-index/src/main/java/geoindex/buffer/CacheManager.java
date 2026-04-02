@@ -71,4 +71,8 @@ public class CacheManager {
     public int getDirtyPageCount() {
         return (int) cache.values().stream().filter(Page::isDirty).count();
     }
+
+    public int getUsedPageCount() {
+        return diskManager.getUsedPageCount();
+    }
 }

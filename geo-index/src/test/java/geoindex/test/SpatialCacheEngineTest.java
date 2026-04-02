@@ -279,6 +279,7 @@ class SpatialCacheEngineTest {
           "disk": {
             "pageReadCount": %d,
             "pageWriteCount": %d
+            "usedPageCount": %d 
           },
           "storage": {
             "flushCount": %d,
@@ -290,7 +291,7 @@ class SpatialCacheEngineTest {
                 metricsSnapshot.queryCount, metricsSnapshot.avgPageIds,
                 metricsSnapshot.pageHit, metricsSnapshot.pageMiss, metricsSnapshot.pageHitRate,
                 metricsSnapshot.cacheSize, metricsSnapshot.evictCount,
-                metricsSnapshot.pageReadCount, metricsSnapshot.pageWriteCount,
+                metricsSnapshot.pageReadCount, metricsSnapshot.pageWriteCount, metricsSnapshot.usedPageCount,
                 metricsSnapshot.flushCount, metricsSnapshot.flushedPages, metricsSnapshot.dirtyPages,
                 metricsSnapshot.overflowPageUsed
         );

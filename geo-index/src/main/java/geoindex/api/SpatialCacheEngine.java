@@ -191,7 +191,8 @@ public class SpatialCacheEngine<T> {
         return engineMetrics.snapshot(
                 (int) pageCacheStore.getCacheSize(),
                 spatialRecordManager.getDirtyPageCount(),
-                spatialRecordManager.getUsedOverflowPageCount()
+                spatialRecordManager.getUsedOverflowPageCount(),
+                spatialRecordManager.getUsedPageCount()
         );
     }
 
