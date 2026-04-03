@@ -45,6 +45,12 @@ public class SpatialCacheEngine<T> {
         CompletableFuture<List<T>> future = new CompletableFuture<>();
         CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
         if(existing != null) return  existing.join();
+        PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
+        if (recheck.isHit()) {
+            future.complete(recheck.getCached());
+            pendingLoads.remove(pageId);
+            return recheck.getCached();
+        }
         try{
             List<T> data = loader.apply(codes);
             pageCacheStore.put(pageId, data);

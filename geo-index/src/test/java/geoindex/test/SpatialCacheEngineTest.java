@@ -13,6 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -21,7 +22,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -296,7 +296,7 @@ class SpatialCacheEngineTest {
     }
     @Test
     void loader_1번_호출_검증() throws InterruptedException {
-        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        spatialRecordManager.put( 33.4996, 126.5312 , "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
 
@@ -304,9 +304,10 @@ class SpatialCacheEngineTest {
         int treadCount = 100;
         ExecutorService executorService = Executors.newFixedThreadPool(treadCount);
         CountDownLatch countDownLatch = new CountDownLatch(treadCount);
+        int pageCount = engine.search(33.4996, 126.5312 , 5.0).size();
         for (int i = 0; i < treadCount; i++) {
             executorService.submit(() -> {
-                engine.search(37.4979, 127.0276, 5.0, codes -> {
+                engine.search(33.4996, 126.5312, 5.0, codes -> {
                     loaderCallCount.incrementAndGet();
                     return List.of("data");
                 });
@@ -316,7 +317,7 @@ class SpatialCacheEngineTest {
         countDownLatch.await();
         executorService.shutdown();
 
-        assertEquals(1, loaderCallCount.get());
+        assertEquals(pageCount, loaderCallCount.get());
     }
     @Test
     void exception_스레드_전파() throws InterruptedException {
@@ -342,7 +343,6 @@ class SpatialCacheEngineTest {
         }
         countDownLatch.await();
         executorService.shutdown();
-
         assertEquals(treadCount, exceptionCount.get(), "모든 스레드가 예외를 받아야 한다");
         System.out.println("\"exception 전파 확인 (deadlock 없음)\"");
     }
