@@ -17,6 +17,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -289,4 +294,71 @@ class SpatialCacheEngineTest {
                 metricsSnapshot.overflowPageUsed
         );
     }
+    @Test
+    void loader_1번_호출_검증() throws InterruptedException {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        AtomicInteger loaderCallCount = new AtomicInteger(0);
+        int treadCount = 100;
+        ExecutorService executorService = Executors.newFixedThreadPool(treadCount);
+        CountDownLatch countDownLatch = new CountDownLatch(treadCount);
+        for (int i = 0; i < treadCount; i++) {
+            executorService.submit(() -> {
+                engine.search(37.4979, 127.0276, 5.0, codes -> {
+                    loaderCallCount.incrementAndGet();
+                    return List.of("data");
+                });
+                countDownLatch.countDown();
+            });
+        }
+        countDownLatch.await();
+        executorService.shutdown();
+
+        assertEquals(1, loaderCallCount.get());
+    }
+    @Test
+    void exception_스레드_전파() throws InterruptedException {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int treadCount = 10;
+        ExecutorService executorService = Executors.newFixedThreadPool(treadCount);
+        CountDownLatch countDownLatch = new CountDownLatch(treadCount);
+        AtomicInteger exceptionCount = new AtomicInteger(0);
+        for (int i = 0; i < treadCount; i++) {
+            executorService.submit(() -> {
+                try {
+                    engine.search(37.4979, 127.0276, 5.0, codes -> {
+                        throw new RuntimeException("loader 실패");
+                    });
+                } catch (Exception e) {
+                    exceptionCount.incrementAndGet();
+                } finally {
+                    countDownLatch.countDown();
+                }
+            });
+        }
+        countDownLatch.await();
+        executorService.shutdown();
+
+        assertEquals(treadCount, exceptionCount.get(), "모든 스레드가 예외를 받아야 한다");
+        System.out.println("\"exception 전파 확인 (deadlock 없음)\"");
+    }
+    @Test
+    void 캐시HIT시_loader_미호출(){
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        engine.putCache(geoHashIndex.toPageId(37.4979, 127.0276) , List.of("data1", "data2"));
+        AtomicInteger loaderCallCount = new AtomicInteger(0);
+        engine.search(37.4979, 127.0276, 5.0, codes -> {
+            loaderCallCount.incrementAndGet();
+            return List.of("data1", "data2");
+        });
+
+        assertEquals(0, loaderCallCount.get());
+    }
+
 }

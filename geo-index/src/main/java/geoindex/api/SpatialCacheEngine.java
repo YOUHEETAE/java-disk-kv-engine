@@ -7,7 +7,11 @@ import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 public class SpatialCacheEngine<T> {
 
@@ -16,6 +20,7 @@ public class SpatialCacheEngine<T> {
     private final PageCacheStore<T> pageCacheStore;
     private final EngineMetrics engineMetrics;
     private final WarmupStore warmupStore;
+    private final ConcurrentHashMap<Integer, CompletableFuture<List<T>>> pendingLoads = new ConcurrentHashMap<>();
 
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, EngineMetrics engineMetrics) {
         this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics, null);
@@ -31,6 +36,38 @@ public class SpatialCacheEngine<T> {
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager,
                               CachePolicy cachePolicy, EngineMetrics engineMetrics) {
         this(spatialRecordManager, cachePolicy, engineMetrics, null);
+    }
+
+    private List<T> getOrLoad(int pageId, List<String> codes, Function<List<String>, List<T>> loader){
+        PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
+        if (result.isHit()) return result.getCached();
+
+        CompletableFuture<List<T>> future = new CompletableFuture<>();
+        CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
+        if(existing != null) return  existing.join();
+        try{
+            List<T> data = loader.apply(codes);
+            pageCacheStore.put(pageId, data);
+            future.complete(data);
+            return data;
+
+        } catch (Exception e){
+            future.completeExceptionally(e);
+            throw e;
+        }finally {
+            pendingLoads.remove(pageId);
+        }
+
+    }
+
+    public List<List<T>> search (double lat, double lng, double radiusKm, Function<List<String>, List<T>> loader){
+        Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
+
+        List<List<T>> results = new ArrayList<>();
+        for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
+            results.add(getOrLoad(entry.getKey(), entry.getValue(), loader));
+        }
+        return results;
     }
 
 
