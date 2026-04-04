@@ -11,12 +11,8 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
-<<<<<<< HEAD
 import java.util.function.Function;
-=======
->>>>>>> 3e4dcfc (feat: getWarmupTargets() 추가 및 WarmupStore 경고 로그 추가)
 import java.util.stream.Collectors;
-
 public class SpatialCacheEngine<T> {
 
 
