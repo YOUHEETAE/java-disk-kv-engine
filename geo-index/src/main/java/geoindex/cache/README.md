@@ -165,19 +165,29 @@ PageCacheStore → SpatialRecordManager 없음 (순환 참조 없음) ✅
 ```
 [Spring SpatialCacheService]
   │
-  └─ spatialCacheEngine.search(lat, lng, radius)
+  └─ spatialCacheEngine.search(lat, lng, radius, batchLoader)
         ↓
-      [SpatialCacheEngine]
+      [SpatialCacheEngine — Phase 1: 분류]
       srm.searchRadiusCodesByPageId() → Map<pageId, codes>
-      pageCacheStore.getOrMiss(pageId, codes)
-        ├─ HIT  → PageResult.hit (JVM 캐시 데이터 즉시 반환)
-        └─ MISS → PageResult.miss (codes 목록 반환)
+      각 pageId:
+        pageCacheStore.getOrMiss(pageId, codes)
+          ├─ HIT  → hitResults 저장
+          └─ MISS → pendingLoads.putIfAbsent(pageId, future)
+                      ├─ winner (null 반환): double-check → toLoad 등록
+                      └─ waiter (기존 future): waitFuture 등록
+        ↓
+      [SpatialCacheEngine — Phase 2: Batch Load]
+      toLoad의 모든 codes flatten + distinct
+      batchLoader.apply(codes) → DB 단 1회 조회 → Map<code, T>
+      pageId별 결과 분배 → pageCacheStore.put() + future.complete()
+        ↓
+      [SpatialCacheEngine — Phase 3: 수집]
+      HIT    → hitResults에서 직접
+      winner → myFuture.getNow() (이미 완료)
+      waiter → waitFuture.join() (winner 완료 대기)
         ↓
       [Spring SpatialCacheService]
-      MISS → MariaDB JOIN 조회
-      spatialCacheEngine.putCache(pageId, dbResults)
-        ↓
-      pageCacheStore.put(pageId, data) → JVM 캐시 저장 (덮어쓰기)
+      MBR 필터링 → 반환
 ```
 
 ---
@@ -259,14 +269,19 @@ persist → 순간 스냅샷 기록 → 정확한 순간 값 보장 불필요
 
 ```
 JVM 프로세스 종료 = 캐시 초기화
-  → 재시작 시 WarmupStore.getTopPageIds()로 Top 50 pageId 선제 적재
+  → 재시작 시 WarmupStore.getTopPageIds()로 Top N pageId 선제 적재
 
 동시성 안전:
   synchronized → 모든 메서드 직렬화
   clearCache() → pageCache.clear()로 내용물 제거 (final 참조 유지)
+```
 
-미구현:
-  Thundering Herd 완전 방지 (동시 MISS → 중복 DB 조회 허용)
-  → 같은 데이터 덮어쓰기로 정합성은 보장
-  → computeIfAbsent + Future 조합으로 개선 가능하나 복잡도 대비 효과 낮음
+**Thundering Herd 방지:**
+```
+PageCacheStore 레벨: 동시 put → 덮어쓰기로 정합성 보장
+SpatialCacheEngine 레벨: pendingLoads(ConcurrentHashMap<pageId, CompletableFuture>)
+  → 동일 pageId MISS 시 winner 1개만 DB 조회
+  → waiter는 winner CompletableFuture.join() 대기
+  → putIfAbsent 직후 double-check로 race 방지 (Bug 10)
+  → 상세: CONCURRENCY.md Bug 10
 ```

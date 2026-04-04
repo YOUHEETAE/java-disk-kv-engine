@@ -39,6 +39,10 @@ List<String> getAllCodesByPageId(int pageId)
 
 **API:**
 ```java
+// Batch Loading Cache — HIT/MISS 분류 + 배치 DB 조회 + 캐시 저장 + 결과 반환 one-call
+List<T> search(double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader)
+
+// 내부 캐시 직접 제어 (searchV1 / 워밍업용)
 List<PageResult<T>> search(double lat, double lng, double radiusKm)
 void putCache(int pageId, List<T> data)
 
@@ -49,19 +53,22 @@ boolean isCached(int pageId)
 long getCacheSize()
 CachePolicy getPolicy()
 
+Map<Integer, List<String>> getWarmupTargets(int n)
 List<Integer> getWarmupCandidates(int n)
 void persistWarmup()
 ```
 
 | 메서드 | 반환 | 용도 |
 |--------|------|------|
-| `search` | `List<PageResult<T>>` | HIT/MISS 판단 후 반환 |
+| `search(batchLoader)` | `List<T>` | Batch Load — MISS codes 수집 → DB 1회 → 캐시 저장 → 결과 반환 (권장) |
+| `search` | `List<PageResult<T>>` | HIT/MISS 판단만 → 호출자가 직접 DB 조회 + putCache (searchV1 / 워밍업) |
 | `putCache` | void | MISS 후 DB 결과 JVM 캐시 저장 |
 | `rebuild` | void | 파일 재구축 + JVM 캐시 초기화 |
 | `clearCache` | void | JVM 캐시만 초기화 |
 | `isCached` | boolean | 특정 pageId 캐시 여부 확인 |
 | `getCacheSize` | long | 현재 캐시 항목 수 |
-| `getWarmupCandidates` | `List<Integer>` | 히트 횟수 Top N pageId 반환 (Spring 워밍업용) |
+| `getWarmupTargets` | `Map<Integer, List<String>>` | Top N pageId + 해당 codes 반환 (Spring 워밍업 일괄 조회용) |
+| `getWarmupCandidates` | `List<Integer>` | 히트 횟수 Top N pageId 반환 |
 | `persistWarmup` | void | 히트 카운트 디스크 저장 (Spring @PreDestroy용) |
 
 **생성자:**

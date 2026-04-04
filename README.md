@@ -69,12 +69,12 @@ flowchart TD
     REQ([HTTP 요청]) --> SCS
 
     subgraph Spring["Spring Application"]
-        SCS["SpatialCacheService"]
+        SCS["SpatialCacheService\nsearch(lat, lng, radius, batchLoader)"]
     end
 
     subgraph Engine["geo-index Engine (순수 Java)"]
         subgraph API["API Layer"]
-            SCE["SpatialCacheEngine\nsearch / putCache / rebuild / clearCache"]
+            SCE["SpatialCacheEngine\nsearch(batchLoader) / rebuild / clearCache"]
             SRM["SpatialRecordManager\nsearchRadiusCodesByPageId / searchRadius / put / rebuild"]
         end
 
@@ -95,12 +95,11 @@ flowchart TD
 
     DB[("MariaDB")]
 
-    SCS --> SCE
+    SCS -->|batchLoader 전달| SCE
     SCE -->|HIT| RES([즉시 반환])
-    SCE -->|MISS → codes 반환| SCS
-    SCS -->|MISS → DB 조회| DB
-    DB -->|putCache| SCE
-    DB --> RES
+    SCE -->|MISS → batchLoader 실행| DB
+    DB -->|codes→data Map 반환| SCE
+    SCE -->|캐시 저장 후| RES
 ```
 
 ---
@@ -220,6 +219,35 @@ Mixed  (현실적 서비스):  70% 핫스팟     → HIT 95.9%        → 24.6x
 Hotspot (Best Case):    서울 주요 지역 순환 → HIT 98.6%    → 46.8x
 ```
 
+### JMeter 동시 요청 벤치마크 (실서비스 50 스레드)
+
+> 측정 조건: JMeter 50 concurrent threads / 서울 핫스팟 50개 좌표 순환 / 반경 3km
+> 비교 대상: Batch Load (`search(batchLoader)`) vs 개별 Load (`searchV1`)
+
+```
+Batch Load (search with batchLoader):
+  평균 응답시간:  1,490ms
+  처리량:        32.4 req/s
+
+개별 Load (searchV1 — MISS 별 개별 DB 조회):
+  평균 응답시간:  3,400ms
+  처리량:        14.3 req/s
+
+→ 동시 요청 환경에서 Batch Load가 약 2.3x 빠름
+```
+
+**개선 원인 분석:**
+```
+searchV1:
+  동시 MISS → pageId별 개별 DB 조회
+  N개 MISS → N번 DB 왕복 (커넥션 풀 경합)
+
+Batch Load:
+  모든 MISS codes → 단 1회 IN 쿼리 (커넥션 1개)
+  pendingLoads → 동일 pageId 중복 쿼리 방지
+  → DB 커넥션 경합 최소화 + 쿼리 수 감소
+```
+
 ---
 
 ## Production Integration
@@ -245,14 +273,40 @@ MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary
 → 완료 후 파일 교체 + JVM 캐시 자동 초기화
 ```
 
-**Thundering Herd 방지:**
+**Thundering Herd 방지 (Batch Loading Cache):**
 ```
-rebuild 완료 직후 JVM 캐시가 초기화된 상태에서 트래픽이 몰리면
-동일 pageId에 대해 다수의 동시 MISS → 중복 DB 쿼리 발생 가능
+rebuild 완료 직후 동시 MISS가 몰리면 동일 pageId에 중복 DB 쿼리 발생 가능
 
-→ rebuild를 트래픽 최저점(새벽 배치)에 실행하면 자연스럽게 방지됨
-   캐시가 비어있는 구간에 동시 요청 자체가 적기 때문
-→ 별도 구현(computeIfAbsent + Future) 없이 운영 스케줄링으로 해결
+→ Loading Cache + Batch Load 패턴으로 해결 (Caffeine / Guava 방식)
+
+Phase 1 — 분류:
+  각 pageId에 대해 getOrMiss() → HIT / MISS 판단
+  MISS pageId: pendingLoads.putIfAbsent(pageId, future)
+    → winner: toLoad에 등록 (이 스레드가 로딩 담당)
+    → waiter: waitFuture에 등록 (winner 결과 대기)
+  winner는 putIfAbsent 후 double-check:
+    재확인 HIT → future 즉시 완료 (다른 스레드가 먼저 put한 경우)
+
+Phase 2 — Batch Load:
+  toLoad의 모든 codes를 flatten + distinct → DB 단 1회 조회
+  결과를 pageId별로 분배 → putCache + future.complete
+
+Phase 3 — 수집:
+  HIT → hitResults에서 직접
+  winner → myFuture.getNow() (이미 완료)
+  waiter → waitFuture.join() (winner 완료 대기)
+```
+
+**핵심 트레이드오프:**
+```
+synchronized만 있는 경우:
+  동시 MISS → 각 스레드가 독립적으로 DB 조회 (중복 쿼리 발생)
+  정합성은 보장 (덮어쓰기)
+
+Batch Load + pendingLoads:
+  동일 pageId 중복 DB 쿼리 방지
+  모든 MISS 코드를 1회 쿼리로 처리
+  → Bug 10: putIfAbsent 후 double-check 필요 (상세: CONCURRENCY.md)
 ```
 
 ### Spring MVC 연동
@@ -279,9 +333,14 @@ mvn install
 @Bean public CacheManager cacheManager() { ... }
 @Bean public SpatialRecordManager spatialRecordManager() { ... }
 
-// SpatialCacheService — 엔진 호출
-spatialCacheEngine.search(lat, lng, radiusKm);    // HIT/MISS 판단
-spatialCacheEngine.putCache(pageId, dbResults);   // MISS 후 캐시 저장
+// SpatialCacheService — 배치 로더 람다 전달
+List<HospitalWebResponse> results = spatialCacheEngine.search(
+    lat, lng, radiusKm,
+    codes -> hospitalJdbcRepository.findByHospitalCodes(codes)
+               .stream()
+               .collect(Collectors.toMap(HospitalWebResponse::getHospitalCode, h -> h))
+);
+// HIT/MISS 분류 → 배치 DB 조회 → 캐시 저장 → 결과 반환이 search() 내부에서 완결
 ```
 
 위 성능 수치는 이 연동 환경에서 실제 한국 병원 데이터 79,081건으로 측정한 결과입니다.
@@ -315,6 +374,7 @@ spatialCacheEngine.putCache(pageId, dbResults);   // MISS 후 캐시 저장
 | 7 | `Page.dirty` visibility 문제 → flush 누락 | `volatile` 미선언 | `volatile boolean dirty` |
 | 8 | `CacheManager.flush()` dirty flag race → 변경사항 유실 | isDirty-writePage-clearDirty 비원자성 | `synchronized(page)` |
 | 9 | `PageCacheStore` 동시 접근 → LRU 순서 손상 / maxSize 초과 | `ConcurrentHashMap` → `LinkedHashMap(access-order)` thread-unsafe | 전 메서드 `synchronized` + LRU eviction |
+| 10 | `search(batchLoader)` — `putIfAbsent` winner가 double-check 없이 진행 → MISS 중복 DB 조회 | Thread A가 put+remove 완료 후 Thread B가 putIfAbsent 호출 → empty pendingLoads에 등록 → 재호출 | `putIfAbsent` 직후 `getOrMiss` double-check |
 
 **근본 원인:**
 
@@ -463,6 +523,12 @@ geo-index/
     - PageCacheStore 연동 — getOrMiss() 시 recordAccess() 호출
     - SpatialCacheEngine.getWarmupCandidates() / persistWarmup() — Spring 연동 API
     - Spring @PostConstruct 워밍업 / @PreDestroy persist 흐름 설계
+✅ Phase 16: Batch Loading Cache + Thundering Herd 방지
+    - search(batchLoader) — 모든 MISS codes 수집 → 단 1회 DB 배치 조회
+    - pendingLoads ConcurrentHashMap — 동일 pageId 중복 로딩 방지 (winner/waiter 구조)
+    - putIfAbsent + double-check — race condition 방지 (Bug 10 해결)
+    - Spring SpatialCacheService 연동 — 배치 로더 람다 전달 방식으로 단순화
+    - JMeter 50 스레드 벤치마크: 개별 Load 대비 약 2.3x 응답속도 개선 (3,400ms → 1,490ms)
 ```
 
 ---
