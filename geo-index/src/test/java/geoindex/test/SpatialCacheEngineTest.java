@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -309,7 +310,7 @@ class SpatialCacheEngineTest {
             executorService.submit(() -> {
                 engine.search(33.4996, 126.5312, 5.0, codes -> {
                     loaderCallCount.incrementAndGet();
-                    return List.of("data");
+                    return Map.of("H001", "data");
                 });
                 countDownLatch.countDown();
             });
@@ -355,7 +356,7 @@ class SpatialCacheEngineTest {
         AtomicInteger loaderCallCount = new AtomicInteger(0);
         engine.search(37.4979, 127.0276, 5.0, codes -> {
             loaderCallCount.incrementAndGet();
-            return List.of("data1", "data2");
+            return Map.of("data1", "data2");
         });
 
         assertEquals(0, loaderCallCount.get());

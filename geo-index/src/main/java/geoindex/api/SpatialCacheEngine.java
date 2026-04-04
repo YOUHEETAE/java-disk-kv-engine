@@ -6,6 +6,7 @@ import geoindex.cache.WarmupStore;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
 
+import javax.sound.sampled.Line;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -66,14 +67,73 @@ public class SpatialCacheEngine<T> {
 
     }
 
-    public List<List<T>> search (double lat, double lng, double radiusKm, Function<List<String>, List<T>> loader){
+    public List<T> search (double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader){
         Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
+        
+        Map<Integer, List<T>> hitResults = new LinkedHashMap<>();
+        Map<Integer, CompletableFuture<List<T>>> waitFuture = new LinkedHashMap<>();
+        Map<Integer, List<String>> toLoad = new LinkedHashMap<>();
+        Map<Integer, CompletableFuture<List<T>>> myFuture = new LinkedHashMap<>();
 
-        List<List<T>> results = new ArrayList<>();
         for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
-            results.add(getOrLoad(entry.getKey(), entry.getValue(), loader));
+            int pageId = entry.getKey();
+            List<String> codes = entry.getValue();
+            PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
+            if (result.isHit()) {
+                hitResults.put(pageId, result.getCached());
+                continue;
+            }
+            CompletableFuture<List<T>> future = new CompletableFuture<>();
+            CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
+            if(existing == null){
+                PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
+                if (recheck.isHit()) {
+                    future.complete(recheck.getCached());
+                    pendingLoads.remove(pageId);
+                    hitResults.put(pageId, recheck.getCached());
+                } else {
+                  toLoad.put(pageId, codes);
+                  myFuture.put(pageId, future);
+                }
+            } else {
+                waitFuture.put(pageId, existing);
+            }
         }
-        return results;
+        if(!toLoad.isEmpty()){
+            try {
+                List<String> codes = toLoad.values().stream()
+                        .flatMap(Collection::stream)
+                        .distinct()
+                        .collect(Collectors.toList());
+                Map<String, T> loaded = batchLoader.apply(codes);
+                for (Map.Entry<Integer, List<String>> entry : toLoad.entrySet()) {
+                    int pageId = entry.getKey();
+                    List<T> pageData = entry.getValue().stream()
+                            .map(loaded::get)
+                            .filter(Objects::nonNull)
+                            .collect(Collectors.toList());
+                    putCache(pageId, pageData);
+                    myFuture.get(pageId).complete(pageData);
+                }
+            } catch (Exception e){
+                myFuture.values().forEach(f -> f.completeExceptionally(e));
+                throw e;
+            } finally {
+                myFuture.keySet().forEach(pendingLoads::remove);
+            }
+        }
+        List<T> result = new ArrayList<>();
+        for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
+            int pageId = entry.getKey();
+            if(hitResults.containsKey(pageId)){
+                result.addAll(hitResults.get(pageId));
+            } else if (myFuture.containsKey(pageId)) {
+                result.addAll(myFuture.get(pageId).getNow(List.of()));
+            } else if (waitFuture.containsKey(pageId)) {
+                result.addAll(waitFuture.get(pageId).join());
+            }
+        }
+        return result;
     }
 
 
