@@ -521,6 +521,69 @@ FullScan: 5765건 | GeoIndex: 5765건 | 일치: true | FS누락: 0건 ✅
 
 ---
 
+---
+
+### Bug 10. `search(batchLoader)` — `putIfAbsent` winner의 double-check 누락
+
+**증상:**
+```
+동일 pageId에 대해 loader가 2회 호출됨
+→ DB 쿼리 중복 발생 (데이터 정합성은 유지, 효율 손상)
+```
+
+**원인:**
+
+```
+목표: 동일 pageId에 대해 loader는 단 1회만 호출해야 한다.
+
+Thread A: getOrMiss(pageId) → MISS
+Thread A: putIfAbsent(pageId, futureA) → null 반환 (winner)
+Thread A: loader 호출 시작
+Thread A: pageCacheStore.put(pageId, data)   ← 저장 완료
+Thread A: future.complete(data)
+Thread A: pendingLoads.remove(pageId)        ← 삭제 완료
+
+Thread B: getOrMiss(pageId) → MISS  (Thread A가 remove하기 전, MISS 확인)
+Thread B: putIfAbsent(pageId, futureB) → null 반환 (winner)  ← A가 이미 remove했기 때문
+Thread B: loader 호출 시작   ← 중복 호출!
+```
+
+```
+[Thread A]  getOrMiss(MISS) → putIfAbsent(winner) → loader → put → complete → remove
+                                                                                   ↑
+[Thread B]                                     getOrMiss(MISS) ─────────────────── putIfAbsent(winner) → loader 중복!
+```
+
+Thread A의 put→complete→remove 사이클이 완료된 뒤 Thread B가 putIfAbsent를 호출하면,
+이미 remove된 빈 pendingLoads에 winner로 등록된다. getOrMiss는 이미 MISS로 확인됐으므로
+다시 loader를 호출하게 된다.
+
+**해결:** `putIfAbsent` 후 `getOrMiss` double-check
+
+```java
+// winner 확정 직후 — 다른 스레드가 이미 put했을 수 있음
+CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
+if (existing == null) {
+    // double-check: Thread A가 put+remove 완료 후 내가 winner가 됐을 수 있음
+    PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
+    if (recheck.isHit()) {
+        future.complete(recheck.getCached());
+        pendingLoads.remove(pageId);
+        hitResults.put(pageId, recheck.getCached());
+    } else {
+        toLoad.put(pageId, codes);   // 실제 로딩 필요
+        myFuture.put(pageId, future);
+    }
+} else {
+    waitFuture.put(pageId, existing);  // waiter
+}
+```
+
+> double-check는 winner가 된 직후 캐시를 재확인한다.
+> "내가 winner가 된 건 다른 스레드가 remove한 직후일 수 있다"는 사실을 처리한다.
+
+---
+
 ## 수정 파일 목록
 
 | 파일 | 수정 내용 | Bug |
@@ -535,3 +598,4 @@ FullScan: 5765건 | GeoIndex: 5765건 | 일치: true | FS누락: 0건 ✅
 | `buffer/CacheManager.java` | `flush()` → `synchronized(page)` 블록 추가 | Bug 8 |
 | `cache/PageCacheStore.java` | `ConcurrentHashMap` → `LinkedHashMap(access-order)` + 전 메서드 `synchronized` (LRU eviction) | Bug 9 |
 | `index/GeoHashIndex.java` | `getPageIds()` 경계값 → `Math.min((1L<<15)-1, ...)` | 로직 버그 |
+| `api/SpatialCacheEngine.java` | `search(batchLoader)` — `putIfAbsent` 직후 double-check 추가 | Bug 10 |
