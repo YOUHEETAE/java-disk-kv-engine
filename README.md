@@ -580,7 +580,7 @@ geo-index/
     - putIfAbsent + double-check — race condition 방지 (Bug 10 해결)
     - Spring SpatialCacheService 연동 — 배치 로더 람다 전달 방식으로 단순화
     - JMeter 50 스레드 벤치마크: 개별 Load 대비 약 2.3x 응답속도 개선 (3,400ms → 1,490ms)
-⬜ Phase 18: 약국 데이터 색인 연동
+✅ Phase 18: 약국 데이터 색인 연동
     - 약국 코드 + 좌표 → pharmacy.db 색인 (병원과 동일 구조)
     - SpatialCacheEngine<PharmacyDto> 인스턴스 별도 생성 (pageId 공간 자연 분리)
     - Spring SpatialCacheService 약국 엔진 빈 등록 + batchLoader 연동
