@@ -120,7 +120,7 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 
 ### GeoHash 인덱스 (Morton 코드 직접 사용)
 
-3단계 설계 개선을 거쳐 현재 구조에 도달했습니다:
+3단계 설계 개선을 거쳐 현재 구조에 도달:
 
 ```
 1차: steps × steps 고정 셀 → 반경 경계 누락
@@ -275,7 +275,7 @@ Batch Load:
 
 ## Production Integration
 
-MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary Database 대체가 아닌 **공간 필터 + JVM 캐시** 역할로 사용합니다.
+MiniDB는 트랜잭션 및 동시성 제어를 지원하지 않으므로 Primary Database 대체가 아닌 **공간 필터 + JVM 캐시** 역할로 사용한다.
 
 ```
 [요청]
