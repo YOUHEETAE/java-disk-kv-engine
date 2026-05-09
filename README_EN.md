@@ -568,7 +568,6 @@ SpatialRecordManager (Page-level lock ✅)
   DiskManager         (RandomAccessFile sync missing ❌ → Bug 5, 6)
 ```
 
-Each layer must be independently protected. Full details: [CONCURRENCY.md](./CONCURRENCY.md)
 
 ### Verification Method — `/compare` Endpoint
 
@@ -596,7 +595,7 @@ After fix:
   100 comparisons → 0 missing from concurrency ✅
 ```
 
-→ Details: [CONCURRENCY_EN.md](./CONCURRENCY.md)
+→ Details: [CONCURRENCY_EN.md](./CONCURRENCY_EN.md)
 
 ---
 
