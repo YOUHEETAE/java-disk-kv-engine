@@ -7,6 +7,8 @@
 > → pageId 단위 JVM Cache로 DB 접근 제거
 > → 외부 인프라(Redis) 없이 서비스 내 메모리만으로 해결
 
+[English README](./README_EN.md) | 현재 Phase 18 완료 | [Spring 연동 가이드 바로가기](#spring-연동-가이드)
+
 ---
 
 ## 배경
@@ -120,7 +122,7 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 
 ### GeoHash 인덱스 (Morton 코드 직접 사용)
 
-3단계 설계 개선을 거쳐 현재 구조에 도달했습니다:
+4단계 설계 개선을 거쳐 현재 구조에 도달했습니다:
 
 ```
 1차: steps × steps 고정 셀 → 반경 경계 누락
@@ -332,54 +334,215 @@ Batch Load + pendingLoads:
   → Bug 10: putIfAbsent 후 double-check 필요 (상세: CONCURRENCY.md)
 ```
 
-### Spring MVC 연동
+## Spring 연동 가이드
 
-순수 Spring MVC 프로젝트에 Maven 로컬 빌드로 연동하여 **실제 서비스에 적용 중**이다.
+이 엔진은 특정 도메인에 의존하지 않는다. **위도(lat), 경도(lng), 고유 코드(String)** 가 있다면
+병원, 약국, 편의점, 식당 등 어떤 위치 데이터에도 동일하게 적용할 수 있다.
+
+```
+엔진이 요구하는 것:
+  put()    → lat (double), lng (double), code (String)
+  search() → lat, lng, radiusKm → List<T>  (T는 서비스가 결정)
+```
+
+### 1단계: 엔진 빌드
+
+루트 디렉토리가 아닌 **`geo-index` 서브모듈** 안에서 실행한다.
 
 ```bash
-# geo-index 엔진 로컬 빌드
+cd geo-index
 mvn install
 ```
 
+### 2단계: 의존성 추가
+
 ```xml
-<!-- Spring MVC 프로젝트 pom.xml -->
 <dependency>
-    <groupId>geoindex</groupId>
+    <groupId>com.geoindex</groupId>
     <artifactId>geo-index</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-```java
-// GeoIndexConfig — Storage / Buffer / API 레이어 빈 등록
-@Bean public DiskManager diskManager() { ... }
-@Bean public CacheManager cacheManager() { ... }
-@Bean public SpatialRecordManager spatialRecordManager() { ... }
-@Bean public WarmupStore warmupStore() { ... }
+### 3단계: GeoIndexConfig — 빈 등록
 
-// SpatialCacheService — 배치 로더 람다 전달
-List<HospitalWebResponse> results = spatialCacheEngine.search(
-    lat, lng, radiusKm,
-    codes -> hospitalJdbcRepository.findByHospitalCodes(codes)
-               .stream()
-               .collect(Collectors.toMap(HospitalWebResponse::getHospitalCode, h -> h))
-);
-// HIT/MISS 분류 → 배치 DB 조회 → 캐시 저장 → 결과 반환이 search() 내부에서 완결
+`GeoIndexEngine.builder()`가 내부 7개 컴포넌트(EngineMetrics, DiskManager, CacheManager, GeoHashIndex, SpatialRecordManager, WarmupStore, SpatialCacheEngine) 조립을 대신한다.
+
+빈 구성 시 주의사항:
+- **`destroyMethod = "close"` 필수**. Spring 종료 시 dirty page flush + 파일 닫음 + warmup hit count 저장
+- **`warmupFile`은 필수**. 누락 시 `IllegalStateException`
+- 동일 타입 빈이 여러 개이므로 **`@Qualifier` 필수**
+
+```java
+@Configuration
+public class GeoIndexConfig {
+
+    @Bean(name = "placeASpatialCacheEngine", destroyMethod = "close")
+    public SpatialCacheEngine<PlaceADto> placeASpatialCacheEngine() {
+        return GeoIndexEngine.<PlaceADto>builder()
+                .dbFile("place-a.db")
+                .warmupFile("place-a-warmup.store")
+                .build();
+    }
+
+    @Bean(name = "placeBSpatialCacheEngine", destroyMethod = "close")
+    public SpatialCacheEngine<PlaceBDto> placeBSpatialCacheEngine() {
+        return GeoIndexEngine.<PlaceBDto>builder()
+                .dbFile("place-b.db")
+                .warmupFile("place-b-warmup.store")
+                .build();
+    }
+}
+```
+
+### 4단계: application.properties
+
+```properties
+# 워밍업 대상 pageId Top N (히트 횟수 기준 핫스팟 페이지)
+cache.warmup.size=3000
+
+# CachePolicy 커스터마이징 (선택 — 기본값: TTL 비활성화, 크기 무제한)
+# cache.ttl.days=0     # 0 = 비활성화. 배치 주기에 clearCache() 호출로 대신
+# cache.max-size=-1    # -1 = 무제한
+```
+
+### 5단계: 서비스 클래스
+
+`AbstractSpatialCacheEngine<T>`를 상속하면 search / warmup / rebuild / shutdown 공통 로직이 자동으로 제공된다.
+
+서비스는 두 가지 레포지토리가 필요하다.
+- **IN 쿼리용**: `WHERE code IN (...)` — MISS 시 배치 로드
+- **전체 조회용**: `findAll()` — rebuild 시 전체 색인 재구축
+
+구현해야 하는 메서드는 5개다:
+
+| 메서드 | 역할 |
+|--------|------|
+| `loadByCodes(codes)` | codes → DB IN 쿼리 → `Map<String, T>` 반환 |
+| `getCode(item)` | T에서 고유 코드 추출 |
+| `getLat(item)` | T에서 위도 추출 |
+| `getLng(item)` | T에서 경도 추출 |
+| `isValid(item)` | 좌표 null 체크 (기본값 `true` — 필요 시 오버라이드) |
+
+```java
+@Slf4j
+@Service
+public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDto> {
+
+    private final PlaceJdbcRepository jdbcRepository;  // IN 쿼리용
+    private final PlaceRepository repository;          // 전체 조회 (rebuild용)
+    private final Executor taskExecutor;
+
+    public PlaceSpatialCacheService(
+            @Qualifier("placeASpatialCacheEngine") SpatialCacheEngine<PlaceDto> spatialCacheEngine,
+            PlaceJdbcRepository jdbcRepository,
+            PlaceRepository repository,
+            Executor taskExecutor) {
+        super(spatialCacheEngine);
+        this.jdbcRepository = jdbcRepository;
+        this.repository     = repository;
+        this.taskExecutor   = taskExecutor;
+    }
+
+    @Override
+    protected Map<String, PlaceDto> loadByCodes(List<String> codes) {
+        return jdbcRepository.findByCodes(codes).stream()
+                .collect(Collectors.toMap(PlaceDto::getCode, p -> p));
+    }
+
+    @Override protected String getCode(PlaceDto p) { return p.getCode(); }
+    @Override protected double getLat(PlaceDto p)  { return p.getLat(); }
+    @Override protected double getLng(PlaceDto p)  { return p.getLng(); }
+
+    @Override
+    protected boolean isValid(PlaceDto p) {
+        return p.getLat() != null && p.getLng() != null;
+    }
+
+    // ① 색인 빌드 / 주기적 리빌드 — atomic rename으로 서비스 중단 없음
+    public void buildIndex() {
+        spatialCacheEngine.rebuild(srm ->
+            repository.findAll().forEach(p -> {
+                if (p.getLat() != null && p.getLng() != null)
+                    srm.put(p.getLat(), p.getLng(), p.getCode().getBytes());
+            })
+        );
+        CompletableFuture.runAsync(this::warmup, taskExecutor);
+    }
+
+    // ② 서버 시작 시 비동기 워밍업 — search()는 부모에서 제공
+    @PostConstruct
+    public void init() {
+        CompletableFuture.runAsync(this::warmup, taskExecutor);
+    }
+
+    // ③ 종료 시 히트 히스토리 저장 → 재시작 후 warmup()에서 복원
+    @PreDestroy
+    public void destroy() { shutdown(); }
+
+    public MetricsSnapshot getMetric() { return getMetrics(); }
+}
+```
+
+**부모가 제공하는 것:**
+- `search(lat, lng, radiusKm)` — batchLoader + MBR 후처리 필터 포함
+- `warmup()` — WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache
+- `shutdown()` — `persistWarmup()` 호출
+- `getMetrics()` — 전 레이어 메트릭 스냅샷
+
+### 6단계: Prometheus / Grafana 연동 (선택)
+
+도메인별로 `EngineMetrics`를 분리했다면 `type` 태그로 각 엔진의 메트릭을 독립적으로 확인할 수 있다.
+도메인이 더 추가되면 `register()` 호출만 늘리면 된다.
+
+```java
+@Component
+public class GeoIndexMetricsExporter {
+
+    // 도메인별 엔진을 Map으로 관리하면 도메인 추가 시 코드 변경 없음
+    private final Map<String, SpatialCacheEngine<?>> engines;
+    private final MeterRegistry meterRegistry;
+
+    public GeoIndexMetricsExporter(
+            @Qualifier("placeASpatialCacheEngine") SpatialCacheEngine<?> placeAEngine,
+            @Qualifier("placeBSpatialCacheEngine") SpatialCacheEngine<?> placeBEngine,
+            MeterRegistry meterRegistry) {
+        this.engines = Map.of("place-a", placeAEngine, "place-b", placeBEngine);
+        this.meterRegistry = meterRegistry;
+    }
+
+    @PostConstruct
+    public void registerMetrics() {
+        engines.forEach(this::register);
+    }
+
+    private void register(String type, SpatialCacheEngine<?> engine) {
+        List<Tag> tags = List.of(Tag.of("type", type));
+        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().queryCount);
+        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().pageHit);
+        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().pageMiss);
+        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().pageHitRate);
+        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cacheSize);
+        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().pageReadCount);
+        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().pageWriteCount);
+        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().overflowPageUsed);
+    }
+}
 ```
 
 ### SpatialCacheEngine — 최상단 API
 
 Spring은 이 메서드들만 알면 된다. 내부 인덱스 구현이 바뀌어도 서비스 코드는 변경 없다.
 
-| 메서드 | 용도 |
+| 메서드 | 설명 |
 |--------|------|
-| `search(lat, lng, radiusKm, batchLoader)` | 반경 검색 — MISS codes 배치 DB 조회 → 캐시 저장 → 결과 반환 (권장) |
-| `search(lat, lng, radiusKm)` | 반경 검색 — HIT/MISS 판단만, DB 조회는 호출자 책임 |
-| `putCache(pageId, data)` | MISS 후 DB 결과 JVM 캐시 저장 |
-| `rebuild(loader)` | 파일 재구축 + JVM 캐시 초기화 (atomic rename) |
-| `getWarmupTargets(n)` | Top N pageId + codes 반환 (워밍업용) |
-| `persistWarmup()` | 히트 카운트 디스크 저장 (종료 시 호출) |
-| `getMetrics()` | 전 레이어 메트릭 스냅샷 조회 |
+| `search(lat, lng, radiusKm, batchLoader)` | 반경 검색. MISS codes → 배치 DB 조회 → 캐시 저장 → 결과 반환 **(권장)** |
+| `search(lat, lng, radiusKm)` | 반경 검색. HIT/MISS 판단만, DB 조회는 호출자 책임 |
+| `putCache(pageId, data)` | MISS 후 DB 결과를 pageId 단위로 JVM 캐시 저장 |
+| `rebuild(loader)` | 전체 재색인. atomic rename으로 서비스 중단 없음. 완료 후 JVM 캐시 초기화 |
+| `getWarmupTargets(n)` | 히트 횟수 기준 Top N pageId와 소속 codes 반환 (워밍업용) |
+| `persistWarmup()` | 히트 카운트 디스크 저장. `@PreDestroy`에서 호출 |
+| `getMetrics()` | 전 레이어 메트릭 스냅샷 반환 (queryCount, hitRate, pageReadCount 등) |
 
 위 성능 수치는 이 연동 환경에서 실제 한국 병원 데이터 79,081건으로 측정한 결과다.
 
@@ -470,11 +633,13 @@ geo-index/
   buffer/
     CacheManager.java       Write-Back 캐싱 + rebuild + computeIfAbsent
   api/
-    SpatialCacheEngine.java     최상단 API — JVM 캐시 (getOrMiss / put / clearCache)
-    SpatialRecordManager.java   파일 검색 / 저장 / rebuild
-    PageResult.java             캐시 조회 결과 값 객체
-    RecordId.java               레코드 물리 위치 값 객체 (pageId + slotId)
-    RecordManager.java          Key-Value 저장
+    GeoIndexEngine.java              빌더 팩토리 — 내부 7개 컴포넌트 조립을 1줄로
+    AbstractSpatialCacheEngine.java  템플릿 메서드 — search/warmup/rebuild/shutdown 공통 로직
+    SpatialCacheEngine.java          최상단 API — JVM 캐시 (getOrMiss / put / clearCache)
+    SpatialRecordManager.java        파일 검색 / 저장 / rebuild
+    PageResult.java                  캐시 조회 결과 값 객체
+    RecordId.java                    레코드 물리 위치 값 객체 (pageId + slotId)
+    RecordManager.java               Key-Value 저장
   cache/
     PageCacheStore.java         LinkedHashMap LRU 기반 캐시 인프라
     CachePolicy.java            TTL / maxSize 정책
@@ -584,6 +749,12 @@ geo-index/
     - 약국 코드 + 좌표 → pharmacy.db 색인 (병원과 동일 구조)
     - SpatialCacheEngine<PharmacyDto> 인스턴스 별도 생성 (pageId 공간 자연 분리)
     - Spring SpatialCacheService 약국 엔진 빈 등록 + batchLoader 연동
+✅ Phase 19: Spring 연동 단순화
+    - GeoIndexEngine.builder() — 내부 7개 컴포넌트 조립을 1줄로 (팩토리 패턴)
+    - AbstractSpatialCacheEngine<T> — search/warmup/rebuild/shutdown 공통 로직 (템플릿 메서드 패턴)
+    - 서비스는 loadByCodes / getCode / getLat / getLng / isValid 5개 메서드만 구현
+    - GeoIndexConfig 94줄 → 30줄 / 서비스 보일러플레이트 90% 제거
+    - SpatialCacheEngine.close() 체인으로 리소스 정리 일원화
 ```
 
 </details>

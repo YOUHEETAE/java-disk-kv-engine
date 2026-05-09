@@ -32,7 +32,9 @@ public class SpatialRecordManager {
         this.engineMetrics = engineMetrics;
     }
 
-
+    public void close() {
+        cacheManager.close();
+    }
 
     // -------------------------------------------------------------------------
     // 락 관리
@@ -227,4 +229,5 @@ public class SpatialRecordManager {
     public int getUsedPageCount() {
         return cacheManager.getUsedPageCount();
     }
+
 }

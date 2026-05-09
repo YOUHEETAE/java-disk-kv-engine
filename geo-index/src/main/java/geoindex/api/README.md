@@ -6,6 +6,67 @@
 
 ## 클래스
 
+### GeoIndexEngine.java
+
+`SpatialCacheEngine` 생성에 필요한 내부 7개 컴포넌트(EngineMetrics, DiskManager, CacheManager, GeoHashIndex, SpatialRecordManager, WarmupStore, SpatialCacheEngine) 조립을 1줄로 대체하는 팩토리 빌더입니다.
+
+**API:**
+```java
+GeoIndexEngine.<T>builder()
+    .dbFile("place.db")           // 필수 — 색인 파일 경로
+    .warmupFile("place.store")    // 필수 — 워밍업 히트 카운트 저장 경로
+    .cachePolicy(CachePolicy.DEFAULT)  // 선택 — 기본값: TTL 비활성화, 크기 무제한
+    .build()                      // → SpatialCacheEngine<T> 반환
+```
+
+| 옵션 | 필수 여부 | 설명 |
+|------|-----------|------|
+| `dbFile` | 필수 | 색인 파일 경로. 누락 시 `IllegalStateException` |
+| `warmupFile` | 필수 | 워밍업 히트 카운트 영속 파일 경로. 누락 시 `IllegalStateException` |
+| `cachePolicy` | 선택 | TTL / maxSize 정책. 기본값 `CachePolicy.DEFAULT` |
+
+> Spring에서는 `@Bean(destroyMethod = "close")`로 등록해야 종료 시 flush + 파일 닫음이 보장된다.
+
+---
+
+### AbstractSpatialCacheEngine.java
+
+Spring 서비스가 상속하는 템플릿 메서드 추상 클래스입니다. `search / warmup / rebuild / shutdown` 공통 로직을 제공하며, 서비스는 도메인 추출 메서드 5개만 구현하면 됩니다.
+
+**구현 필수 추상 메서드:**
+```java
+protected abstract Map<String, T> loadByCodes(List<String> codes);  // MISS 시 DB IN 쿼리
+protected abstract String getCode(T item);   // 고유 코드 추출
+protected abstract double getLat(T item);    // 위도 추출
+protected abstract double getLng(T item);    // 경도 추출
+```
+
+**오버라이드 선택:**
+```java
+protected boolean isValid(T item) { return true; }  // 좌표 null 체크 등
+```
+
+**제공 메서드:**
+```java
+public List<T> search(double lat, double lng, double radiusKm)
+public void warmup()
+public void rebuild(Supplier<List<T>> allLoader)
+public void shutdown()
+public MetricsSnapshot getMetrics()
+```
+
+| 메서드 | 설명 |
+|--------|------|
+| `search` | batchLoader 패턴 + MBR 후처리 필터 포함 |
+| `warmup` | WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache |
+| `rebuild` | `allLoader.get()` → isValid 필터 → 색인 재구축 → warmup 호출 |
+| `shutdown` | `persistWarmup()` — `@PreDestroy`에서 호출 |
+
+> `rebuild(Supplier<List<T>>)`는 T 타입 데이터를 직접 로드할 수 있을 때 사용한다.
+> 엔티티와 DTO가 다른 경우 `spatialCacheEngine.rebuild(srm -> ...)` 직접 호출 후 `warmup()` 호출로 대체한다.
+
+---
+
 ### SpatialRecordManager.java
 
 공간 인덱스를 통해 좌표 기반으로 레코드를 저장하고 반경 검색을 수행합니다.
@@ -71,28 +132,18 @@ void persistWarmup()
 | `getWarmupCandidates` | `List<Integer>` | 히트 횟수 Top N pageId 반환 |
 | `persistWarmup` | void | 히트 카운트 디스크 저장 (Spring @PreDestroy용) |
 
-**생성자:**
-```java
-// 기본 — WarmupStore 없음
-new SpatialCacheEngine<>(srm, metrics)
+**생성 방법:**
 
-// CachePolicy 커스텀
-new SpatialCacheEngine<>(srm, cachePolicy, metrics)
-
-// 풀 옵션 — WarmupStore 포함
-new SpatialCacheEngine<>(srm, cachePolicy, metrics, warmupStore)
-```
-
----
-
-### SpatialCache.java
-
-`SpatialCacheEngine`이 구현하는 인터페이스입니다.
+Spring 연동에서는 `GeoIndexEngine.builder()`를 사용한다 (직접 생성자 사용 불필요).
 
 ```java
-interface SpatialCache<T> {
-    List<PageResult<T>> search(double lat, double lng, double radiusKm);
-    void put(List<T> data);
+// Spring Bean 등록
+@Bean(destroyMethod = "close")
+public SpatialCacheEngine<PlaceDto> placeSpatialCacheEngine() {
+    return GeoIndexEngine.<PlaceDto>builder()
+            .dbFile("place.db")
+            .warmupFile("place.store")
+            .build();
 }
 ```
 

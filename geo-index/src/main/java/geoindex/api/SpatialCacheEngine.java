@@ -33,6 +33,10 @@ public class SpatialCacheEngine<T> {
         this.warmupStore = warmupStore;
     }
 
+    public void close(){
+        spatialRecordManager.close();
+    }
+
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager,
                               CachePolicy cachePolicy, EngineMetrics engineMetrics) {
         this(spatialRecordManager, cachePolicy, engineMetrics, null);
@@ -211,6 +215,5 @@ public class SpatialCacheEngine<T> {
     public void persistWarmup() {
         warmupStore.persist();
     }
-
 
 }
