@@ -16,18 +16,32 @@ While working on a location-based hospital search service, I ran into a wall wit
 ```
 Attempt 1: MariaDB SPATIAL INDEX (MBRContains)
   → Optimizer chose Full Scan over spatial index in LEFT JOIN context
-  → FORCE INDEX: 23,000 scanned / 1,000 returned = 23x wasteful (30–50ms)
+  → FORCE INDEX: 23,000 scanned / 1,000 returned = 23x wasteful
 
 Attempt 2: Composite index (coordinate_x, coordinate_y)
   → Longitude range selectivity 29% → random I/O cost > Full Scan cost
   → Optimizer abandoned index in JOIN context → Full Scan
 
 Conclusion: DB spatial indexes don't help at 70K rows + JOIN
-  → Full Scan + BETWEEN was actually optimal (30–50ms)
+  → Full Scan + BETWEEN was actually optimal
 
 Attempt 3: Redis Geohash caching
-  → Reduced DB hits, but network round-trip latency (29–124ms)
-  → Cache lookup slower than expected → diminished benefit
+  Reduced DB hits, but introduced new problems:
+
+  Network RTT (measured):
+    Cache HIT still costs 60–90ms in network round-trip
+    First request after restart: 2,527ms (MISS → background caching → DB fallback)
+
+  Cold start:
+    Background caching required on first MISS
+    All requests fall back to DB directly until caching completes
+
+  No persistence:
+    Redis cache lost on server restart → cold start repeats every deployment
+
+  Domain leak:
+    GeoHash grid caching logic bleeds into service layer
+    Cache key management, grid range calculation embedded in business code
 ```
 
 **Root insight**: If the spatial index doesn't work inside the DB, build it outside.
@@ -595,7 +609,7 @@ After fix:
   100 comparisons → 0 missing from concurrency ✅
 ```
 
-→ Details: [CONCURRENCY_EN.md](./CONCURRENCY_EN.md)
+→ Details: [CONCURRENCY_EN.md](.docs/CONCURRENCY_EN.md)
 
 ---
 

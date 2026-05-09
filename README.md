@@ -18,7 +18,7 @@
 ```
 시도 1: MariaDB SPATIAL INDEX (MBRContains)
   LEFT JOIN 환경에서 공간 연산 오버헤드로 인해
-  옵티마이저가 인덱스 대신 Full Scan을 선택 (30~50ms)
+  옵티마이저가 인덱스 대신 Full Scan을 선택
   FORCE INDEX 강제 시: 23,000 스캔 / 1,000 반환 = 23배 비효율
 
 시도 2: 복합 인덱스 (coordinate_x, coordinate_y)
@@ -26,11 +26,26 @@
   JOIN 환경에서 옵티마이저가 인덱스를 포기 → Full Scan
 
 결론: 7만 건 + JOIN 환경에서 DB 공간 인덱스는 효과 없음
-  → Full Scan + BETWEEN이 오히려 최적 (30~50ms)
+  → Full Scan + BETWEEN이 오히려 최적
 
 시도 3: Redis Geohash 캐싱
-  DB 조회는 줄였으나 네트워크 왕복 지연 (29~124ms)
-  캐시 조회 자체가 느리면 캐싱의 의미가 반감됨
+  DB 조회는 줄였으나 새로운 문제 발생:
+
+  네트워크 왕복 비용 (실측):
+    캐시 HIT 상태에서도 60~90ms 고정 비용 발생
+    재시작 직후 첫 요청: 2,527ms (MISS → 백그라운드 캐싱 → DB 직접 조회)
+
+  Cold start:
+    첫 MISS 시 백그라운드 캐싱 필요
+    캐싱 완료 전까지 모든 요청이 DB로 직접 떨어짐
+
+  영속성 없음:
+    서버 재시작 시 캐시 초기화 → 배포할 때마다 cold start 반복
+
+  도메인 오염:
+    GeoHash 격자 캐싱 로직이 서비스 레이어에 침투
+    캐시 키 관리, 격자 범위 계산이 비즈니스 코드에 박힘
+
 ```
 
 **근본 문제**: 공간 인덱스가 DB 안에서 동작하지 않는다면, DB 밖에서 직접 구현해야 한다.
@@ -604,7 +619,7 @@ GET /loadtest/compare?lat=&lng=&radius=
   전체 100건 비교 → 동시성으로 인한 누락 0건 ✅
 ```
 
-→ 상세 내용: [CONCURRENCY.md](./CONCURRENCY.md)
+→ 상세 내용: [CONCURRENCY.md](.docs/CONCURRENCY.md)
 
 ---
 

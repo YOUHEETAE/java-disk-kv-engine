@@ -274,6 +274,6 @@ long delta = steps * steps * 200;
 
 ## 📚 참고
 
-- [Index 모듈 README](./README.md)
+- [Index 모듈 README](../../../../../../README.md)
 - [벤치마크 결과](../benchmark/README.md)
 - [루트 README](../../../README.md)
