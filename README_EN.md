@@ -5,6 +5,8 @@
 
 **46.8x faster** on hotspot queries · **0 data loss** under 500 concurrent threads · **79,081** real Korean hospital records tested
 
+[한국어 README](./README.md) | Phase 19 complete | [Spring Integration Guide](#spring-integration-guide)
+
 ---
 
 ## Why I Built This
@@ -42,6 +44,22 @@ Solution: Custom Geohash spatial index engine (MiniDB)
 
 Morton code computation, pageId clustering, and page slot structures are complex enough to deserve isolation from Spring business logic.
 Spring only needs to know `search() / putCache() / rebuild()`. Internal index implementation can change without touching service code.
+
+---
+
+## Key Insight
+
+> Spatial Index alone may not meaningfully improve DB query performance.
+>
+> In a real service where MariaDB buffer pool keeps data in memory,
+> the query time difference between Full Scan and GeoIndex is small.
+>
+> But the pageId produced by Spatial Index becomes a cache key:
+> **"same region = same pageId"**
+>
+> Cache at the pageId level, and you can eliminate DB access entirely.
+>
+> **→ The goal is not to make DB queries faster. It's to skip the DB entirely.**
 
 ---
 
@@ -83,44 +101,6 @@ flowchart TD
     SCE -->|MISS → run batchLoader| DB
     DB -->|return codes→data Map| SCE
     SCE -->|store cache| RES
-```
-
----
-
-## Quick Start
-
-```bash
-# 1. Clone and build the engine
-git clone https://github.com/YOUHEETAE/java-disk-kv-engine.git
-cd java-disk-kv-engine/geo-index
-mvn install
-```
-
-```xml
-<!-- Add to your pom.xml -->
-<dependency>
-    <groupId>geoindex</groupId>
-    <artifactId>geo-index</artifactId>
-    <version>1.0-SNAPSHOT</version>
-</dependency>
-```
-
-```java
-// Register beans (Spring)
-@Bean public DiskManager diskManager() { ... }
-@Bean public CacheManager cacheManager() { ... }
-@Bean public SpatialRecordManager spatialRecordManager() { ... }
-@Bean public WarmupStore warmupStore() { ... }
-
-// Use it — pass a batch loader lambda
-List<HospitalWebResponse> results = spatialCacheEngine.search(
-    lat, lng, radiusKm,
-    codes -> hospitalJdbcRepository.findByHospitalCodes(codes)
-               .stream()
-               .collect(Collectors.toMap(HospitalWebResponse::getHospitalCode, h -> h))
-);
-// HIT/MISS classification → batch DB query → cache store → return result
-// all handled inside search()
 ```
 
 ---
@@ -233,6 +213,18 @@ Phase 3 — Collect:
   waiter → waitFuture.join() (wait for winner)
 ```
 
+**Key tradeoff:**
+```
+With synchronized only:
+  Concurrent MISSes → each thread queries DB independently (duplicate queries)
+  Correctness guaranteed (last-write-wins)
+
+Batch Load + pendingLoads:
+  Duplicate DB queries prevented per pageId
+  All MISS codes handled in a single query
+  → Bug 10: putIfAbsent requires double-check (details: CONCURRENCY.md)
+```
+
 ---
 
 ## Performance Results
@@ -285,7 +277,8 @@ Hotspot (Best Case):     Seoul major areas   → HIT 98.6%      → 46.8x
 
 ### JMeter Concurrent Benchmark (50 threads, production data)
 
-> Conditions: 50 concurrent JMeter threads / 50 Seoul hotspot coordinates / 3km radius
+> Conditions: 50 concurrent JMeter threads / 50 Seoul hotspot coordinates / 3km radius  
+> Comparison: Batch Load (`search(batchLoader)`) vs Individual Load (`searchV1`)
 
 ```
 Batch Load (search with batchLoader):
@@ -310,6 +303,242 @@ Batch Load:
   pendingLoads → prevents duplicate queries for same pageId
   → Minimized DB connection contention + fewer queries
 ```
+
+---
+
+## Production Integration
+
+MiniDB does not support transactions or distributed coordination. It is designed as a **spatial filter + JVM cache layer**, not a primary database replacement.
+
+```
+[Request]
+  ↓
+[MiniDB] compute pageId list (< 1ms)
+  ↓
+[SpatialCacheService] check pageId cache
+  ├─ HIT → return immediately (no MariaDB round-trip)
+  └─ MISS → [MariaDB] WHERE hospital_code IN (...) + JOIN
+              → cache result per pageId
+```
+
+**Operations strategy:**
+```
+Hospital data: large batch update once a week
+→ Full MiniDB rebuild weekly (no deletes needed)
+→ Serve from old file during rebuild (atomic rename)
+→ File swap + JVM cache auto-clear on completion
+```
+
+---
+
+## Spring Integration Guide
+
+This engine has no domain-specific dependencies. Any location data with **latitude, longitude, and a unique code (String)** — hospitals, pharmacies, convenience stores, restaurants — works the same way.
+
+```
+What the engine requires:
+  put()    → lat (double), lng (double), code (String)
+  search() → lat, lng, radiusKm → List<T>  (T is determined by your service)
+```
+
+### Step 1: Build the Engine
+
+Run inside the **`geo-index` submodule**, not the root directory.
+
+```bash
+cd geo-index
+mvn install
+```
+
+### Step 2: Add Dependency
+
+```xml
+<dependency>
+    <groupId>com.geoindex</groupId>
+    <artifactId>geo-index</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+### Step 3: GeoIndexConfig — Register Beans
+
+`GeoIndexEngine.builder()` handles assembly of all 7 internal components (EngineMetrics, DiskManager, CacheManager, GeoHashIndex, SpatialRecordManager, WarmupStore, SpatialCacheEngine) in one line.
+
+Key notes:
+- **`destroyMethod = "close"` is required** — flushes dirty pages, closes files, and persists warmup hit counts on Spring shutdown
+- **`warmupFile` is required** — omitting it throws `IllegalStateException`
+- Multiple beans of the same type require **`@Qualifier`**
+
+```java
+@Configuration
+public class GeoIndexConfig {
+
+    @Bean(name = "placeASpatialCacheEngine", destroyMethod = "close")
+    public SpatialCacheEngine<PlaceADto> placeASpatialCacheEngine() {
+        return GeoIndexEngine.<PlaceADto>builder()
+                .dbFile("place-a.db")
+                .warmupFile("place-a-warmup.store")
+                .build();
+    }
+
+    @Bean(name = "placeBSpatialCacheEngine", destroyMethod = "close")
+    public SpatialCacheEngine<PlaceBDto> placeBSpatialCacheEngine() {
+        return GeoIndexEngine.<PlaceBDto>builder()
+                .dbFile("place-b.db")
+                .warmupFile("place-b-warmup.store")
+                .build();
+    }
+}
+```
+
+### Step 4: application.properties
+
+```properties
+# Top N pageIds to warm up (hotspot pages by hit count)
+cache.warmup.size=3000
+
+# CachePolicy customization (optional — defaults: TTL disabled, size unlimited)
+# cache.ttl.days=0     # 0 = disabled. Use clearCache() on batch cycle instead
+# cache.max-size=-1    # -1 = unlimited
+```
+
+### Step 5: Service Class
+
+Extend `AbstractSpatialCacheEngine<T>` to get search / warmup / rebuild / shutdown logic for free.
+
+Your service needs two repositories:
+- **For IN queries**: `WHERE code IN (...)` — batch load on MISS
+- **For full scan**: `findAll()` — full re-index on rebuild
+
+You only implement 5 methods:
+
+| Method | Role |
+|--------|------|
+| `loadByCodes(codes)` | codes → DB IN query → return `Map<String, T>` |
+| `getCode(item)` | Extract unique code from T |
+| `getLat(item)` | Extract latitude from T |
+| `getLng(item)` | Extract longitude from T |
+| `isValid(item)` | Null-check coordinates (default `true` — override if needed) |
+
+```java
+@Slf4j
+@Service
+public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDto> {
+
+    private final PlaceJdbcRepository jdbcRepository;  // for IN queries
+    private final PlaceRepository repository;          // for full scan (rebuild)
+    private final Executor taskExecutor;
+
+    public PlaceSpatialCacheService(
+            @Qualifier("placeASpatialCacheEngine") SpatialCacheEngine<PlaceDto> spatialCacheEngine,
+            PlaceJdbcRepository jdbcRepository,
+            PlaceRepository repository,
+            Executor taskExecutor) {
+        super(spatialCacheEngine);
+        this.jdbcRepository = jdbcRepository;
+        this.repository     = repository;
+        this.taskExecutor   = taskExecutor;
+    }
+
+    @Override
+    protected Map<String, PlaceDto> loadByCodes(List<String> codes) {
+        return jdbcRepository.findByCodes(codes).stream()
+                .collect(Collectors.toMap(PlaceDto::getCode, p -> p));
+    }
+
+    @Override protected String getCode(PlaceDto p) { return p.getCode(); }
+    @Override protected double getLat(PlaceDto p)  { return p.getLat(); }
+    @Override protected double getLng(PlaceDto p)  { return p.getLng(); }
+
+    @Override
+    protected boolean isValid(PlaceDto p) {
+        return p.getLat() != null && p.getLng() != null;
+    }
+
+    // ① Build / periodic rebuild — atomic rename, no service interruption
+    public void buildIndex() {
+        spatialCacheEngine.rebuild(srm ->
+            repository.findAll().forEach(p -> {
+                if (p.getLat() != null && p.getLng() != null)
+                    srm.put(p.getLat(), p.getLng(), p.getCode().getBytes());
+            })
+        );
+        CompletableFuture.runAsync(this::warmup, taskExecutor);
+    }
+
+    // ② Async warmup on server start — search() is provided by parent
+    @PostConstruct
+    public void init() {
+        CompletableFuture.runAsync(this::warmup, taskExecutor);
+    }
+
+    // ③ Persist hit history on shutdown → restored by warmup() on next restart
+    @PreDestroy
+    public void destroy() { shutdown(); }
+
+    public MetricsSnapshot getMetric() { return getMetrics(); }
+}
+```
+
+**What the parent provides:**
+- `search(lat, lng, radiusKm)` — includes batchLoader + MBR post-filter
+- `warmup()` — WarmupStore Top N pageIds → chunked DB IN queries → putCache
+- `shutdown()` — calls `persistWarmup()`
+- `getMetrics()` — metrics snapshot across all layers
+
+### Step 6: Prometheus / Grafana Integration (Optional)
+
+With separate `EngineMetrics` per domain, each engine's metrics can be tracked independently via the `type` tag. Adding a new domain only requires one more `register()` call.
+
+```java
+@Component
+public class GeoIndexMetricsExporter {
+
+    private final Map<String, SpatialCacheEngine<?>> engines;
+    private final MeterRegistry meterRegistry;
+
+    public GeoIndexMetricsExporter(
+            @Qualifier("placeASpatialCacheEngine") SpatialCacheEngine<?> placeAEngine,
+            @Qualifier("placeBSpatialCacheEngine") SpatialCacheEngine<?> placeBEngine,
+            MeterRegistry meterRegistry) {
+        this.engines = Map.of("place-a", placeAEngine, "place-b", placeBEngine);
+        this.meterRegistry = meterRegistry;
+    }
+
+    @PostConstruct
+    public void registerMetrics() {
+        engines.forEach(this::register);
+    }
+
+    private void register(String type, SpatialCacheEngine<?> engine) {
+        List<Tag> tags = List.of(Tag.of("type", type));
+        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().queryCount);
+        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().pageHit);
+        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().pageMiss);
+        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().pageHitRate);
+        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cacheSize);
+        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().pageReadCount);
+        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().pageWriteCount);
+        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().overflowPageUsed);
+    }
+}
+```
+
+### API Reference
+
+Spring only needs to know these methods. Internal index implementation can change without touching service code.
+
+| Method | Purpose |
+|--------|---------|
+| `search(lat, lng, radiusKm, batchLoader)` | Radius search — batch DB query on MISS → cache → return **(recommended)** |
+| `search(lat, lng, radiusKm)` | Radius search — HIT/MISS only, DB query is caller's responsibility |
+| `putCache(pageId, data)` | Store DB result in JVM cache at pageId level after MISS |
+| `rebuild(loader)` | Full re-index via atomic rename — no service interruption, clears JVM cache on complete |
+| `getWarmupTargets(n)` | Return Top N pageIds + codes by hit count (for warmup) |
+| `persistWarmup()` | Save hit counts to disk — call from `@PreDestroy` |
+| `getMetrics()` | Get metrics snapshot across all layers (queryCount, hitRate, pageReadCount, etc.) |
+
+All performance figures above were measured against this integration using 79,081 real Korean hospital records.
 
 ---
 
@@ -371,43 +600,6 @@ After fix:
 
 ---
 
-## Production Integration
-
-MiniDB does not support transactions or distributed coordination. It is designed as a **spatial filter + JVM cache layer**, not a primary database replacement.
-
-```
-[Request]
-  ↓
-[MiniDB] compute pageId list (< 1ms)
-  ↓
-[SpatialCacheService] check pageId cache
-  ├─ HIT → return immediately (no MariaDB round-trip)
-  └─ MISS → [MariaDB] WHERE hospital_code IN (...) + JOIN
-              → cache result per pageId
-```
-
-**Operations strategy:**
-```
-Hospital data: large batch update once a week
-→ Full MiniDB rebuild weekly (no deletes needed)
-→ Serve from old file during rebuild (atomic rename)
-→ File swap + JVM cache auto-clear on completion
-```
-
-### API Reference
-
-| Method | Purpose |
-|--------|---------|
-| `search(lat, lng, radiusKm, batchLoader)` | Radius search — batch DB query on MISS → cache → return (recommended) |
-| `search(lat, lng, radiusKm)` | Radius search — HIT/MISS only, DB query is caller's responsibility |
-| `putCache(pageId, data)` | Store DB result in JVM cache after MISS |
-| `rebuild(loader)` | Rebuild file + clear JVM cache (atomic rename) |
-| `getWarmupTargets(n)` | Return Top N pageIds + codes (for warmup) |
-| `persistWarmup()` | Save hit counts to disk (call on shutdown) |
-| `getMetrics()` | Get metrics snapshot across all layers |
-
----
-
 ## Design Scope & Limitations
 
 This engine is designed for **single-node workloads**.
@@ -433,11 +625,13 @@ geo-index/
   buffer/
     CacheManager.java       Write-Back cache + rebuild + computeIfAbsent
   api/
-    SpatialCacheEngine.java     Top-level API — JVM cache (getOrMiss / put / clearCache)
-    SpatialRecordManager.java   File search / store / rebuild
-    PageResult.java             Cache lookup result value object
-    RecordId.java               Physical record location value object (pageId + slotId)
-    RecordManager.java          Key-Value storage
+    GeoIndexEngine.java              Builder factory — assembles all 7 components in one line
+    AbstractSpatialCacheEngine.java  Template method — search/warmup/rebuild/shutdown shared logic
+    SpatialCacheEngine.java          Top-level API — JVM cache (getOrMiss / put / clearCache)
+    SpatialRecordManager.java        File search / store / rebuild
+    PageResult.java                  Cache lookup result value object
+    RecordId.java                    Physical record location value object (pageId + slotId)
+    RecordManager.java               Key-Value storage
   cache/
     PageCacheStore.java         LinkedHashMap LRU-based cache infrastructure
     CachePolicy.java            TTL / maxSize policy
@@ -526,7 +720,7 @@ geo-index/
              - WarmupStore — per-pageId hit count tracking
              - persist() / load() — hit count disk persistence across restarts
              - getTopPageIds(n) — Top N by hit count descending
-             - IN query chunking (1000 rows) to avoid DB connection timeout
+             - IN query chunking (1,000 rows) to avoid DB connection timeout
 ✅ Phase 16: usedPageCount metric
              - DiskManager.getUsedPageCount() — pageMap.size()
              - Exposed via CacheManager / SpatialRecordManager
@@ -538,6 +732,12 @@ geo-index/
 ✅ Phase 18: Pharmacy data index integration
              - Pharmacy code + coordinates → pharmacy.db index (same structure as hospitals)
              - Separate SpatialCacheEngine<PharmacyDto> instance (pageId space naturally isolated)
+✅ Phase 19: Spring integration simplification
+             - GeoIndexEngine.builder() — assembles all 7 components in one line (factory pattern)
+             - AbstractSpatialCacheEngine<T> — search/warmup/rebuild/shutdown shared logic (template method)
+             - Services implement only 5 methods: loadByCodes / getCode / getLat / getLng / isValid
+             - GeoIndexConfig reduced from 94 lines → 30 lines / 90% service boilerplate eliminated
+             - SpatialCacheEngine.close() chain centralizes resource cleanup
 ```
 
 </details>
