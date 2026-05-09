@@ -596,7 +596,7 @@ After fix:
   100 comparisons → 0 missing from concurrency ✅
 ```
 
-→ Details: [CONCURRENCY.md](./CONCURRENCY.md)
+→ Details: [CONCURRENCY_EN.md](./CONCURRENCY.md)
 
 ---
 
