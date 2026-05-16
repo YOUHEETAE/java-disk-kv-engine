@@ -57,7 +57,7 @@ Solution: Custom Geohash spatial index engine (MiniDB)
 **Why a standalone pure Java engine?**
 
 Morton code computation, pageId clustering, and page slot structures are complex enough to deserve isolation from Spring business logic.
-Spring only needs to know `search() / putCache() / rebuild()`. Internal index implementation can change without touching service code.
+Spring only needs to know `search() / rebuild()`. Internal index implementation can change without touching service code.
 
 ---
 
@@ -175,12 +175,12 @@ Second request (same radius):
 
 On batch update:
 ```java
-spatialRecordManager.rebuild(srm ->
-    hospitalRepo.findAllCodes().forEach(h ->
-        srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
+rebuild(loader ->
+    hospitalRepo.findAll().forEach(h ->
+        loader.put(h.getLat(), h.getLng(), h.getCode())
     )
 );
-// atomic rename replaces old file + clears JVM cache
+// atomic rename replaces old file + clears JVM cache + reruns warmup
 // zero request interruption
 ```
 
@@ -424,15 +424,11 @@ Your service needs two repositories:
 - **For IN queries**: `WHERE code IN (...)` — batch load on MISS
 - **For full scan**: `findAll()` — full re-index on rebuild
 
-You only implement 5 methods:
+You only implement 1 method:
 
 | Method | Role |
 |--------|------|
 | `loadByCodes(codes)` | codes → DB IN query → return `Map<String, T>` |
-| `getCode(item)` | Extract unique code from T |
-| `getLat(item)` | Extract latitude from T |
-| `getLng(item)` | Extract longitude from T |
-| `isValid(item)` | Null-check coordinates (default `true` — override if needed) |
 
 ```java
 @Slf4j
@@ -440,7 +436,7 @@ You only implement 5 methods:
 public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDto> {
 
     private final PlaceJdbcRepository jdbcRepository;  // for IN queries
-    private final PlaceRepository repository;          // for full scan (rebuild)
+    private final PlaceRepository repository;          // for rebuild
     private final Executor taskExecutor;
 
     public PlaceSpatialCacheService(
@@ -460,24 +456,13 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
                 .collect(Collectors.toMap(PlaceDto::getCode, p -> p));
     }
 
-    @Override protected String getCode(PlaceDto p) { return p.getCode(); }
-    @Override protected double getLat(PlaceDto p)  { return p.getLat(); }
-    @Override protected double getLng(PlaceDto p)  { return p.getLng(); }
-
-    @Override
-    protected boolean isValid(PlaceDto p) {
-        return p.getLat() != null && p.getLng() != null;
-    }
-
     // ① Build / periodic rebuild — atomic rename, no service interruption
     public void buildIndex() {
-        spatialCacheEngine.rebuild(srm ->
-            repository.findAll().forEach(p -> {
-                if (p.getLat() != null && p.getLng() != null)
-                    srm.put(p.getLat(), p.getLng(), p.getCode().getBytes());
-            })
+        rebuild(loader ->
+            repository.findAll().stream()
+                .filter(p -> p.getLat() != null && p.getLng() != null)
+                .forEach(p -> loader.put(p.getLat(), p.getLng(), p.getCode()))
         );
-        CompletableFuture.runAsync(this::warmup, taskExecutor);
     }
 
     // ② Async warmup on server start — search() is provided by parent
@@ -495,8 +480,9 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
 ```
 
 **What the parent provides:**
-- `search(lat, lng, radiusKm)` — includes batchLoader + MBR post-filter
+- `search(lat, lng, radiusKm)` — auto-calls loadByCodes on MISS → stores in cache → returns results
 - `warmup()` — WarmupStore Top N pageIds → chunked DB IN queries → putCache
+- `rebuild(Consumer<IndexLoader>)` — atomic rename + clears JVM cache + reruns warmup
 - `shutdown()` — calls `persistWarmup()`
 - `getMetrics()` — metrics snapshot across all layers
 
@@ -538,9 +524,9 @@ public class GeoIndexMetricsExporter {
 }
 ```
 
-### API Reference
+### API Reference — Low-level
 
-Spring only needs to know these methods. Internal index implementation can change without touching service code.
+Use directly when bypassing `AbstractSpatialCacheEngine` for fine-grained control.
 
 | Method | Purpose |
 |--------|---------|
@@ -748,7 +734,7 @@ geo-index/
 ✅ Phase 19: Spring integration simplification
              - GeoIndexEngine.builder() — assembles all 7 components in one line (factory pattern)
              - AbstractSpatialCacheEngine<T> — search/warmup/rebuild/shutdown shared logic (template method)
-             - Services implement only 5 methods: loadByCodes / getCode / getLat / getLng / isValid
+             - Services implement only 1 method: loadByCodes
              - GeoIndexConfig reduced from 94 lines → 30 lines / 90% service boilerplate eliminated
              - SpatialCacheEngine.close() chain centralizes resource cleanup
 ```
