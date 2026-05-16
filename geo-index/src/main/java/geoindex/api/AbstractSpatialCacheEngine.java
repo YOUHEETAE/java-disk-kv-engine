@@ -3,7 +3,7 @@ package geoindex.api;
 import geoindex.metric.MetricsSnapshot;
 
 import java.util.*;
-import java.util.function.Supplier;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public abstract class AbstractSpatialCacheEngine<T> {
@@ -20,35 +20,22 @@ public abstract class AbstractSpatialCacheEngine<T> {
     // -------------------------------------------------------------------------
 
     protected abstract Map<String, T> loadByCodes(List<String> codes);
-    protected abstract String  getCode(T item);
-    protected abstract double  getLat(T item);
-    protected abstract double  getLng(T item);
-
-    // 좌표가 null인 데이터 제외 시 오버라이드
-    protected boolean isValid(T item) { return true; }
 
     // -------------------------------------------------------------------------
     // 공통 로직
     // -------------------------------------------------------------------------
 
+    /**
+     * 반경을 커버하는 pageId 범위의 후보 결과를 반환한다.
+     * 경계 셀의 정확한 필터링(MBR / 원형)은 구현체가 담당한다.
+     */
     public List<T> search(double lat, double lng, double radiusKm) {
-        List<T> results = spatialCacheEngine.search(lat, lng, radiusKm,
-                codes -> loadByCodes(codes));
-
-        double[] mbr = calcMBR(lat, lng, radiusKm);
-        return results.stream()
-                .filter(item -> getLng(item) >= mbr[0] && getLng(item) <= mbr[1]
-                             && getLat(item) >= mbr[2] && getLat(item) <= mbr[3])
-                .collect(Collectors.toList());
+        return spatialCacheEngine.search(lat, lng, radiusKm, codes -> loadByCodes(codes));
     }
 
-    public void rebuild(Supplier<List<T>> allLoader) {
+    public void rebuild(Consumer<IndexLoader> supplier) {
         spatialCacheEngine.rebuild(srm ->
-            allLoader.get().stream()
-                    .filter(this::isValid)
-                    .forEach(item ->
-                        srm.put(getLat(item), getLng(item), getCode(item).getBytes())
-                    )
+            supplier.accept((lat, lng, code) -> srm.put(lat, lng, code.getBytes()))
         );
         warmup();
     }

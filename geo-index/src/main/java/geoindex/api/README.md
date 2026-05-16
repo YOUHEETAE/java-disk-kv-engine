@@ -31,39 +31,28 @@ GeoIndexEngine.<T>builder()
 
 ### AbstractSpatialCacheEngine.java
 
-Spring 서비스가 상속하는 템플릿 메서드 추상 클래스입니다. `search / warmup / rebuild / shutdown` 공통 로직을 제공하며, 서비스는 도메인 추출 메서드 5개만 구현하면 됩니다.
+Spring 서비스가 상속하는 템플릿 메서드 추상 클래스입니다. `search / warmup / rebuild / shutdown` 공통 로직을 제공하며, 서비스는 1개 메서드만 구현하면 됩니다.
 
 **구현 필수 추상 메서드:**
 ```java
 protected abstract Map<String, T> loadByCodes(List<String> codes);  // MISS 시 DB IN 쿼리
-protected abstract String getCode(T item);   // 고유 코드 추출
-protected abstract double getLat(T item);    // 위도 추출
-protected abstract double getLng(T item);    // 경도 추출
-```
-
-**오버라이드 선택:**
-```java
-protected boolean isValid(T item) { return true; }  // 좌표 null 체크 등
 ```
 
 **제공 메서드:**
 ```java
 public List<T> search(double lat, double lng, double radiusKm)
 public void warmup()
-public void rebuild(Supplier<List<T>> allLoader)
+public void rebuild(Consumer<IndexLoader> supplier)
 public void shutdown()
 public MetricsSnapshot getMetrics()
 ```
 
 | 메서드 | 설명 |
 |--------|------|
-| `search` | batchLoader 패턴 + MBR 후처리 필터 포함 |
+| `search` | MISS 시 loadByCodes 자동 호출 → 캐시 저장 → 반환 |
 | `warmup` | WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache |
-| `rebuild` | `allLoader.get()` → isValid 필터 → 색인 재구축 → warmup 호출 |
+| `rebuild` | loader → 색인 재구축 + JVM 캐시 초기화 + warmup 재실행 |
 | `shutdown` | `persistWarmup()` — `@PreDestroy`에서 호출 |
-
-> `rebuild(Supplier<List<T>>)`는 T 타입 데이터를 직접 로드할 수 있을 때 사용한다.
-> 엔티티와 DTO가 다른 경우 `spatialCacheEngine.rebuild(srm -> ...)` 직접 호출 후 `warmup()` 호출로 대체한다.
 
 ---
 

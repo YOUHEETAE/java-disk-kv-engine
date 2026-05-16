@@ -180,12 +180,12 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 
 배치 업데이트 시:
 ```
-spatialRecordManager.rebuild(srm ->
-    hospitalRepo.findAllCodes().forEach(h ->
-        srm.put(h.getLat(), h.getLng(), h.getCode().getBytes())
+rebuild(loader ->
+    hospitalRepo.findAll().forEach(h ->
+        loader.put(h.getLat(), h.getLng(), h.getCode())
     )
 );
-→ atomic rename으로 기존 파일 교체 + JVM 캐시 초기화
+→ atomic rename으로 기존 파일 교체 + JVM 캐시 초기화 + warmup 재실행
 → 요청 중단 없음
 ```
 
@@ -429,15 +429,11 @@ cache.warmup.size=3000
 - **IN 쿼리용**: `WHERE code IN (...)` — MISS 시 배치 로드
 - **전체 조회용**: `findAll()` — rebuild 시 전체 색인 재구축
 
-구현해야 하는 메서드는 5개다:
+구현해야 하는 메서드는 1개다:
 
 | 메서드 | 역할 |
 |--------|------|
 | `loadByCodes(codes)` | codes → DB IN 쿼리 → `Map<String, T>` 반환 |
-| `getCode(item)` | T에서 고유 코드 추출 |
-| `getLat(item)` | T에서 위도 추출 |
-| `getLng(item)` | T에서 경도 추출 |
-| `isValid(item)` | 좌표 null 체크 (기본값 `true` — 필요 시 오버라이드) |
 
 ```java
 @Slf4j
@@ -445,7 +441,7 @@ cache.warmup.size=3000
 public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDto> {
 
     private final PlaceJdbcRepository jdbcRepository;  // IN 쿼리용
-    private final PlaceRepository repository;          // 전체 조회 (rebuild용)
+    private final PlaceRepository repository;          // rebuild용
     private final Executor taskExecutor;
 
     public PlaceSpatialCacheService(
@@ -465,24 +461,13 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
                 .collect(Collectors.toMap(PlaceDto::getCode, p -> p));
     }
 
-    @Override protected String getCode(PlaceDto p) { return p.getCode(); }
-    @Override protected double getLat(PlaceDto p)  { return p.getLat(); }
-    @Override protected double getLng(PlaceDto p)  { return p.getLng(); }
-
-    @Override
-    protected boolean isValid(PlaceDto p) {
-        return p.getLat() != null && p.getLng() != null;
-    }
-
     // ① 색인 빌드 / 주기적 리빌드 — atomic rename으로 서비스 중단 없음
     public void buildIndex() {
-        spatialCacheEngine.rebuild(srm ->
-            repository.findAll().forEach(p -> {
-                if (p.getLat() != null && p.getLng() != null)
-                    srm.put(p.getLat(), p.getLng(), p.getCode().getBytes());
-            })
+        rebuild(loader ->
+            repository.findAll().stream()
+                .filter(p -> p.getLat() != null && p.getLng() != null)
+                .forEach(p -> loader.put(p.getLat(), p.getLng(), p.getCode()))
         );
-        CompletableFuture.runAsync(this::warmup, taskExecutor);
     }
 
     // ② 서버 시작 시 비동기 워밍업 — search()는 부모에서 제공
@@ -500,8 +485,9 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
 ```
 
 **부모가 제공하는 것:**
-- `search(lat, lng, radiusKm)` — batchLoader + MBR 후처리 필터 포함
+- `search(lat, lng, radiusKm)` — MISS 시 loadByCodes 자동 호출 → 캐시 저장 → 반환
 - `warmup()` — WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache
+- `rebuild(Consumer<IndexLoader>)` — atomic rename + JVM 캐시 초기화 + warmup 재실행
 - `shutdown()` — `persistWarmup()` 호출
 - `getMetrics()` — 전 레이어 메트릭 스냅샷
 
@@ -767,7 +753,7 @@ geo-index/
 ✅ Phase 19: Spring 연동 단순화
     - GeoIndexEngine.builder() — 내부 7개 컴포넌트 조립을 1줄로 (팩토리 패턴)
     - AbstractSpatialCacheEngine<T> — search/warmup/rebuild/shutdown 공통 로직 (템플릿 메서드 패턴)
-    - 서비스는 loadByCodes / getCode / getLat / getLng / isValid 5개 메서드만 구현
+    - 서비스는 loadByCodes 1개 메서드만 구현
     - GeoIndexConfig 94줄 → 30줄 / 서비스 보일러플레이트 90% 제거
     - SpatialCacheEngine.close() 체인으로 리소스 정리 일원화
 ```
