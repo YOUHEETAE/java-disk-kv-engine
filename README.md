@@ -62,7 +62,7 @@
 **왜 순수 Java 엔진으로 분리했는가:**
 
 GeoHash Morton 코드 계산, pageId 클러스터링, Page 슬롯 구조 등 공간 인덱스 구현 세부사항을 Spring 서비스에서 격리하기 위해서다.
-Spring은 `search() / putCache() / rebuild()` 세 가지만 알면 되고, 내부 인덱스 구현이 바뀌어도 서비스 코드는 변경이 없다.
+Spring은 `search() / rebuild()` 두 가지만 알면 되고, 내부 인덱스 구현이 바뀌어도 서비스 코드는 변경이 없다.
 
 ---
 
@@ -531,9 +531,9 @@ public class GeoIndexMetricsExporter {
 }
 ```
 
-### SpatialCacheEngine — 최상단 API
+### SpatialCacheEngine — 로우레벨 API
 
-Spring은 이 메서드들만 알면 된다. 내부 인덱스 구현이 바뀌어도 서비스 코드는 변경 없다.
+`AbstractSpatialCacheEngine`을 거치지 않고 직접 제어할 때 사용한다.
 
 | 메서드 | 설명 |
 |--------|------|
@@ -604,8 +604,6 @@ GET /loadtest/compare?lat=&lng=&radius=
 
   전체 100건 비교 → 동시성으로 인한 누락 0건 ✅
 ```
-
-→ 상세 내용: [CONCURRENCY.md](.docs/CONCURRENCY.md)
 
 ---
 
