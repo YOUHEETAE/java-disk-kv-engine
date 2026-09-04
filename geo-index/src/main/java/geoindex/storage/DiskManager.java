@@ -23,7 +23,6 @@ public class DiskManager {
     private RandomAccessFile dbFile;
     private final String filePath;
     private final Map<Integer, Long> pageMap  = new HashMap<>();
-    private final Map<Integer, Integer> entryIndex = new HashMap<>(); // pageId → 헤더 내 인덱스
     private int entryCount = 0;
     private long nextDataOffset = DATA_OFFSET;
 
@@ -57,7 +56,6 @@ public class DiskManager {
             int pageId = dbFile.readInt();
             long offset = dbFile.readLong();
             pageMap.put(pageId, offset);
-            entryIndex.put(pageId, i);
         }
 
         nextDataOffset = Math.max(DATA_OFFSET, dbFile.length());
@@ -91,7 +89,6 @@ public class DiskManager {
                 }
                 offset = nextDataOffset;
                 pageMap.put(pageId, offset);
-                entryIndex.put(pageId, entryCount);
 
                 // 헤더에 새 엔트리 추가
                 dbFile.seek(MAP_OFFSET + (long) entryCount * ENTRY_SIZE);
