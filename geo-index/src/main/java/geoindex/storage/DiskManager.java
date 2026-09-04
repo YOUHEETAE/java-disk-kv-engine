@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Logger;
 
 public class DiskManager {
 
@@ -17,6 +18,7 @@ public class DiskManager {
     private static final int MAP_OFFSET   = 4;             // 매핑 테이블 시작
     private static final long DATA_OFFSET =                // 데이터 시작
             MAP_OFFSET + (long) MAX_ENTRIES * ENTRY_SIZE;
+    private static final Logger log = Logger.getLogger(DiskManager.class.getName());
 
     private RandomAccessFile dbFile;
     private final String filePath;
@@ -122,10 +124,13 @@ public class DiskManager {
     }
     public void rebuild(DiskManagerLoader loader) {
         String tempPath = filePath + ".new";
+        deleteQuietly(Path.of(tempPath));
+        boolean swapped = false;
         boolean dbFileClosed =  false;
+        DiskManager tempDm = null;
         try {
             // 1. 임시 파일에 새 DiskManager 생성
-            DiskManager tempDm = new DiskManager(tempPath, engineMetrics);
+            tempDm = new DiskManager(tempPath, engineMetrics);
 
             // 2. 임시 파일에 데이터 구축 (기존 파일 살아있음)
             loader.load(tempDm);
@@ -133,39 +138,65 @@ public class DiskManager {
             // 3. 임시 파일 닫기
             tempDm.close();
 
-            // 4. 기존 파일 닫기
-            dbFile.close();
-            dbFileClosed = true;
+            synchronized (this) {
 
-            // 5. atomic rename
-            Files.move(
-                    Path.of(tempPath),
-                    Path.of(filePath),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING
-            );
+                // 4. 기존 파일 닫기
+                dbFile.close();
 
-            // 6. 새 파일 열기 + 내부 상태 교체
-            dbFile = new RandomAccessFile(filePath, "rw");
-            pageMap.clear();
-            entryIndex.clear();
-            entryCount     = 0;
-            nextDataOffset = DATA_OFFSET;
-            loadPageMap();
+                dbFileClosed = true;
+
+                // 5. atomic rename
+                Files.move(
+                        Path.of(tempPath),
+                        Path.of(filePath),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING
+                );
+
+                // 6. 새 파일 열기 + 내부 상태 교체
+                dbFile = new RandomAccessFile(filePath, "rw");
+                pageMap.clear();
+                pageMap.putAll(tempDm.pageMap);
+                entryCount = tempDm.entryCount;
+                nextDataOffset = tempDm.nextDataOffset;
+                swapped = true;
+            }
 
         } catch (IOException e) {
-            try{
-                Files.deleteIfExists(Path.of(tempPath));
-            } catch (IOException Ignored) {}
-
-            if (dbFileClosed){
-                try{
-                dbFile = new RandomAccessFile(filePath, "rw");
-                } catch (IOException reOpenEx) {
-                    throw new RuntimeException("reOpen failed", reOpenEx);
+            throw new RuntimeException("rebuild failed", e);
+        }finally {
+            if(!swapped) {
+                closeQuietly(tempDm);
+                deleteQuietly(Path.of(tempPath));
+                if (dbFileClosed){
+                    reopenQuietly();
                 }
             }
-            throw new RuntimeException("DiskManager rebuild failed", e);
+        }
+    }
+
+    private void deleteQuietly(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            log.warning("임시 파일 삭제 실패: " + path + " — " + e.getMessage());
+        }
+    }
+
+    private synchronized void reopenQuietly() {
+        try {
+            dbFile = new RandomAccessFile(filePath, "rw");
+        } catch (IOException e) {
+            log.warning("파일 재오픈 실패: " + filePath + " — " + e.getMessage());
+        }
+    }
+
+    private void closeQuietly(DiskManager dm) {
+        if(dm == null) return;
+        try{
+            dm.close();
+        }catch(RuntimeException e){
+            log.warning("임시 DiskManager 닫기 실패: " + e.getMessage());
         }
     }
 
