@@ -38,11 +38,11 @@ class RebuildTest {
         geoindex.storage.Page page = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(page);
         geoindex.storage.PageLayout.writeRecord(page, "B0001".getBytes());
-        dm.writePage(page);
+        dm.savePage(page);
 
         dm.rebuild(tempDm -> {});
 
-        geoindex.storage.Page after = dm.readPage(1);
+        geoindex.storage.Page after = dm.loadPage(1);
         assertNull(after, "rebuild 후 기존 페이지는 없어야 한다");
 
         dm.close();
@@ -56,16 +56,16 @@ class RebuildTest {
         geoindex.storage.Page old = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(old);
         geoindex.storage.PageLayout.writeRecord(old, "OLD".getBytes());
-        dm.writePage(old);
+        dm.savePage(old);
 
         dm.rebuild(tempDm -> {
             geoindex.storage.Page newPage = new geoindex.storage.Page(1);
             geoindex.storage.PageLayout.initializePage(newPage);
             geoindex.storage.PageLayout.writeRecord(newPage, "NEW".getBytes());
-            tempDm.writePage(newPage);
+            tempDm.savePage(newPage);
         });
 
-        geoindex.storage.Page read = dm.readPage(1);
+        geoindex.storage.Page read = dm.loadPage(1);
         assertEquals("NEW", new String(geoindex.storage.PageLayout.readRecord(read, 0)));
 
         dm.close();

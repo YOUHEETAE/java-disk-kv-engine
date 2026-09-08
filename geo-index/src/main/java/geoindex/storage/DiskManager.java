@@ -52,14 +52,14 @@ public class DiskManager {
         this.filePath = filePath;
         try {
             this.dbFile = new RandomAccessFile(filePath, "rw");
-            loadPageMap();
+            loadMappingTable();
         } catch (IOException e) {
             throw new RuntimeException("DiskManager init failed", e);
         }
     }
 
 
-    private void loadPageMap() throws IOException {
+    private void loadMappingTable() throws IOException {
         if (dbFile.length() < MAP_OFFSET) {
             dbFile.seek(COUNT_OFFSET);
             dbFile.writeInt(0);
@@ -92,7 +92,7 @@ public class DiskManager {
      * seek 과 readFully 사이에 다른 스레드가 seek 하면 그 위치를 읽어버린다.
      * 두 호출이 한 덩어리로 묶여야 한다.
      */
-    public synchronized Page readPage(int pageId) {
+    public synchronized Page loadPage(int pageId) {
         Long offset = pageMap.get(pageId);
         if (offset == null) return null;
         engineMetrics.incrementPageReadCount();
@@ -102,7 +102,7 @@ public class DiskManager {
             dbFile.readFully(page.getData());
             return page;
         } catch (IOException e) {
-            throw new RuntimeException("readPage failed: pageId=" + pageId, e);
+            throw new RuntimeException("loadPage failed: pageId=" + pageId, e);
         }
     }
 
@@ -115,7 +115,7 @@ public class DiskManager {
      * synchronized 인 이유: 파일 포인터뿐 아니라 nextDataOffset · entryCount · pageMap 이
      * 함께 갱신된다. 나뉘어 실행되면 두 스레드가 같은 오프셋을 할당받아 서로를 덮어쓴다.
      */
-    public synchronized void writePage(Page page) {
+    public synchronized void savePage(Page page) {
         engineMetrics.incrementPageWriteCount();
         try {
             int pageId = page.getPageId();
@@ -147,7 +147,7 @@ public class DiskManager {
             dbFile.write(page.getData(), 0, Page.PAGE_SIZE);
 
         } catch (IOException e) {
-            throw new RuntimeException("writePage failed: pageId=" + page.getPageId(), e);
+            throw new RuntimeException("savePage failed: pageId=" + page.getPageId(), e);
         }
     }
 
@@ -187,7 +187,7 @@ public class DiskManager {
             // 3. 임시 파일 닫기
             tempDm.close();
 
-            // ── 파일 교체 구간. readPage / writePage 와 같은 모니터를 잡는다 ──
+            // ── 파일 교체 구간. loadPage / savePage 와 같은 모니터를 잡는다 ──
             // 이 안에는 dbFile 이 닫혀 있고 pageMap 이 비어 있는 순간이 있다.
             // 잠그지 않으면 요청 스레드가
             //   (1) 닫힌 파일을 읽어 예외가 나거나
@@ -209,8 +209,8 @@ public class DiskManager {
                 );
 
                 // 6. 새 파일 열기 + 내부 상태 교체
-                //    새 파일의 매핑은 tempDm 이 이미 갖고 있다 — 적재하며 writePage 가 채웠다.
-                //    파일에서 다시 읽으면(loadPageMap) 엔트리 수만큼 seek 이 발생해
+                //    새 파일의 매핑은 tempDm 이 이미 갖고 있다 — 적재하며 savePage 가 채웠다.
+                //    파일에서 다시 읽으면(loadMappingTable) 엔트리 수만큼 seek 이 발생해
                 //    락 구간이 길어지고, 그 도중 실패하면 pageMap 이 반쯤 찬 상태로 남는다.
                 //    메모리 복사는 실패하지 않으므로 그 경로 자체를 없앤다.
                 dbFile = new RandomAccessFile(filePath, "rw");
@@ -246,7 +246,7 @@ public class DiskManager {
     /**
      * 교체 실패 시 기존 파일을 다시 열어 서비스를 잇는다. 이것까지 실패하면 재시작이 필요하다.
      *
-     * 셋 중 여기만 synchronized 인 이유: dbFile 은 readPage 가 읽는 공유 필드이고,
+     * 셋 중 여기만 synchronized 인 이유: dbFile 은 loadPage 가 읽는 공유 필드이고,
      * 이 메서드는 finally 에서 호출되어 이미 락 밖이다.
      */
     private synchronized void reopenQuietly() {

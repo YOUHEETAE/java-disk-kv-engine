@@ -18,7 +18,7 @@ public class Page {
      * 엔진의 고정 페이지 크기(4KB)
      * OS 페이지·파일시스템 블록 크기와 맞춰 경계에 걸친 읽기/쓰기를 피한다.
      * 너무 작으면 페이지 관리 및 오버플로우가 증가하고
-     * 너무 크면 불필요한 i/o비용이 증가한다. (writePage 는 항상 페이지 전체를 쓴다)
+     * 너무 크면 불필요한 i/o비용이 증가한다. (savePage 는 항상 페이지 전체를 쓴다)
      */
     public static final int PAGE_SIZE = 4096;
     private final int pageId;

@@ -31,8 +31,8 @@ class DiskManagerTest {
                 data[i] = (byte) (i % 256);
             }
 
-            dm.writePage(page);
-            Page read = dm.readPage(0);
+            dm.savePage(page);
+            Page read = dm.loadPage(0);
 
             assertNotNull(read);
             assertArrayEquals(page.getData(), read.getData());
@@ -50,9 +50,9 @@ class DiskManagerTest {
             PageLayout.initializePage(page);
             PageLayout.writeRecord(page, "강남병원".getBytes());
 
-            dm.writePage(page);
+            dm.savePage(page);
 
-            Page read = dm.readPage(largePageId);
+            Page read = dm.loadPage(largePageId);
             assertNotNull(read);
             assertEquals("강남병원", new String(PageLayout.readRecord(read, 0)));
         } finally {
@@ -68,7 +68,7 @@ class DiskManagerTest {
         for (int pageId : pageIds) {
             Page page = new Page(pageId);
             PageLayout.initializePage(page);
-            dm.writePage(page);
+            dm.savePage(page);
         }
         dm.close();
 
@@ -88,7 +88,7 @@ class DiskManagerTest {
     void testReadNonExistentPageReturnsNull() {
         DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
-            Page page = dm.readPage(999_999_999);
+            Page page = dm.loadPage(999_999_999);
             assertNull(page);
         } finally {
             dm.close();

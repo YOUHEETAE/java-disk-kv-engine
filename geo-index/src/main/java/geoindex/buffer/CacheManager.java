@@ -32,7 +32,7 @@ public class CacheManager {
      * "없으면 캐시에 넣지 않는다"가 별도 분기 없이 성립하는 이유다.
      */
     public Page findPage(int pageId) {
-        return cache.computeIfAbsent(pageId, diskManager::readPage);
+        return cache.computeIfAbsent(pageId, diskManager::loadPage);
     }
 
     /**
@@ -45,14 +45,14 @@ public class CacheManager {
      */
     public Page getOrCreatePage(int pageId){
         return cache.computeIfAbsent(pageId, id -> {
-            Page page = diskManager.readPage(id);
+            Page page = diskManager.loadPage(id);
             return page != null ? page : new Page(id);
         });
     }
 
     /**
      * pageId 순으로 쓰는 이유: pageId 가 Morton 코드라 오름차순이 곧 Z-곡선 순서다.
-     * writePage 는 처음 보는 pageId 에만 offset 을 이어 붙이므로, 전부 새 페이지인
+     * savePage 는 처음 보는 pageId 에만 offset 을 이어 붙이므로, 전부 새 페이지인
      * rebuild 에서 파일 배치가 공간 인접성을 따라간다. 해시 순서로 쓰면 인덱스가
      * 만들어낸 인접성이 파일에서 사라져, 반경 쿼리가 파일 전체에 흩어진 seek 이 된다.
      *
@@ -75,7 +75,7 @@ public class CacheManager {
             // 뒤집어야 독자가 빈 페이지를 보지 않는다.
             synchronized (page) {
                 if (page.isDirty()) {
-                    diskManager.writePage(page);
+                    diskManager.savePage(page);
                     page.clearDirty();
                     engineMetrics.incrementFlushedPages();
                 }
