@@ -50,11 +50,11 @@ class CacheManagerTest {
     }
 
     @Test
-    void testPutPage(){
+    void testDirtyPageStaysInCache(){
         Page page1 = cacheManager.getOrCreatePage(7);
         page1.getData()[0] = 42;
         page1.getData()[1] = 43;
-        cacheManager.putPage(page1);
+        page1.markDirty();
         assertTrue(page1.isDirty());
 
         Page page2 = cacheManager.getOrCreatePage(7);
@@ -68,7 +68,7 @@ class CacheManagerTest {
         Page page1 = cacheManager.getOrCreatePage(7);
         page1.getData()[0] = 77;
         page1.getData()[1] = 88;
-        cacheManager.putPage(page1);
+        page1.markDirty();
 
         cacheManager.close();
 
@@ -93,9 +93,9 @@ class CacheManagerTest {
         page2.getData()[0] = 88;
         page3.getData()[0] = 99;
 
-        cacheManager.putPage(page1);
-        cacheManager.putPage(page2);
-        cacheManager.putPage(page3);
+        page1.markDirty();
+        page2.markDirty();
+        page3.markDirty();
 
         Page cached1 = cacheManager.getOrCreatePage(7);
         Page cached2 = cacheManager.getOrCreatePage(8);

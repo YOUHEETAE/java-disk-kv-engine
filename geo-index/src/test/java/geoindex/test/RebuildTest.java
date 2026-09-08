@@ -84,7 +84,7 @@ class RebuildTest {
 
         geoindex.storage.Page page = cm.getOrCreatePage(5);
         page.getData()[0] = 42;
-        cm.putPage(page);
+        page.markDirty();
 
         cm.rebuild(tempCm -> {});
 

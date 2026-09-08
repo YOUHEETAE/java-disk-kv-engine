@@ -29,7 +29,6 @@ public class RecordManager {
         }
 
         int slotId = writeWithOverflow(pageId, page, value);
-        cacheManager.putPage(page);
         index.put(key, new RecordId(pageId, slotId));
     }
 

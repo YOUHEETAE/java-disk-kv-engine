@@ -69,7 +69,6 @@ public class SpatialRecordManager {
                 int slotId = PageLayout.writeRecord(current, value);
 
                 if (slotId != -1) {
-                    cacheManager.putPage(current);
                     return;
                 }
 
@@ -78,7 +77,6 @@ public class SpatialRecordManager {
                     overflowPageId = allocateOverflowPage();
                     PageLayout.setOverflowPageId(current, overflowPageId);
                 }
-                cacheManager.putPage(current);
                 current = cacheManager.getOrCreatePage(overflowPageId);
             }
         } finally {

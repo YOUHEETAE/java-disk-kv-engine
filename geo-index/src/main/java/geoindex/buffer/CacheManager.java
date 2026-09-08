@@ -41,16 +41,10 @@ public class CacheManager {
      * 기존 레코드가 예외 없이 사라진다.
      */
     public Page getOrCreatePage(int pageId){
-        return cache.computeIfAbsent(pageId, id -> {Page page = diskManager.readPage(id);
-            return page != null ? page : new Page(id);});
-    }
-
-
-    public void putPage(Page page) {
-        synchronized (page) {
-            page.markDirty();
-        }
-        cache.put(page.getPageId(), page);
+        return cache.computeIfAbsent(pageId, id -> {
+            Page page = diskManager.readPage(id);
+            return page != null ? page : new Page(id);
+        });
     }
 
     public void flush() {
