@@ -4,6 +4,9 @@ import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.storage.Page;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheManager {
@@ -47,9 +50,20 @@ public class CacheManager {
         });
     }
 
+    /**
+     * pageId 순으로 쓰는 이유: pageId 가 Morton 코드라 오름차순이 곧 Z-곡선 순서다.
+     * writePage 는 처음 보는 pageId 에만 offset 을 이어 붙이므로, 전부 새 페이지인
+     * rebuild 에서 파일 배치가 공간 인접성을 따라간다. 해시 순서로 쓰면 인덱스가
+     * 만들어낸 인접성이 파일에서 사라져, 반경 쿼리가 파일 전체에 흩어진 seek 이 된다.
+     *
+     * 다만 overflow 페이지는 별도 번호 공간(32,768~)이라 자기 primary 와 멀리 떨어진다.
+     * 체인이 있는 칸의 지역성은 이 정렬로 해결되지 않는다.
+     */
     public void flush() {
         engineMetrics.incrementFlushCount();
-        for (Page page : cache.values()) {
+        List<Page> pages = new ArrayList<>(cache.values());
+        pages.sort(Comparator.comparingInt(Page::getPageId));
+        for (Page page : pages) {
             synchronized (page) {
                 if (page.isDirty()) {
                     diskManager.writePage(page);
