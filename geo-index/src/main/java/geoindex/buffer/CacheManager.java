@@ -64,21 +64,21 @@ public class CacheManager {
         List<Page> pages = new ArrayList<>(cache.values());
         pages.sort(Comparator.comparingInt(Page::getPageId));
         for (Page page : pages) {
-            // 이 synchronized 는 짝이 없다. 쓰기 경로가 잡는 것은
-            // SpatialRecordManager 의 pageLocks(체인 단위 RWLock)라 별개 객체이고,
-            // 상호배제는 같은 락 객체를 잡을 때만 성립한다. 지금 안전한 이유는
-            // 락이 아니라 "런타임 쓰기가 없다"는 것뿐이다.
+            // 락 없이 쓴다. 예전엔 synchronized (page) 가 있었지만 쓰기 경로가 잡는 것은
+            // SpatialRecordManager 의 pageLocks(RWLock)라 별개 객체였고, 상호배제는
+            // 같은 락 객체를 잡을 때만 성립하므로 아무것도 막지 못했다. 락처럼 보여
+            // 검토를 통과시키는 쪽이 더 해로워 지웠다.
             //
-            // 쓰기 API 를 열면 flush 도 같은 락에 참여해야 하는데, flush 는 페이지의
-            // primary 를 모르므로 락 키를 pageId 로 내려야 한다. 그러면 체인이 한 문
-            // 뒤에 있지 못하니 append 를 "overflow 페이지를 완성한 뒤 링크를 건다"로
-            // 뒤집어야 독자가 빈 페이지를 보지 않는다.
-            synchronized (page) {
-                if (page.isDirty()) {
-                    diskManager.savePage(page);
-                    page.clearDirty();
-                    engineMetrics.incrementFlushedPages();
-                }
+            // 지금 안전한 이유는 flush 가 put 과 겹치지 않게 불리기 때문이다.
+            // 겹치게 하려면 pageLocks 의 키를 primary 에서 각 pageId 로 내려야 한다 —
+            // flush 는 페이지의 primary 를 모르고 자기 pageId 만 알기 때문이다.
+            // 그러면 flush 가 readLock 을 잡고 같은 락에 참여할 수 있다. 대신 체인이
+            // 한 문 뒤에 있지 못하니, append 를 "overflow 페이지를 완성한 뒤 링크를
+            // 건다"로 뒤집어야 독자가 빈 페이지를 보지 않는다.
+            if (page.isDirty()) {
+                diskManager.savePage(page);
+                page.clearDirty();
+                engineMetrics.incrementFlushedPages();
             }
         }
     }
