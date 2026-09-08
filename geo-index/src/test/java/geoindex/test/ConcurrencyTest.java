@@ -1,4 +1,4 @@
-package geoindex.concurrency;
+package geoindex.test;
 
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
