@@ -4,11 +4,20 @@ import java.util.*;
 
 public class GeoHashIndex implements SpatialIndex {
 
-    private static final int PRECISION = 6;
+    /**
+     * 축당 비트 수. 격자는 2^15 × 2^15 = 32,768 × 32,768 칸이 된다.
+     * 위경도 합쳐 30비트라 pageId 가 int 범위에 들어간다 — 16 이상이면 넘친다.
+     *
+     * 이 엔진은 GeoHash 문자열을 만들지 않고 Morton 정수만 만들므로,
+     * base32 문자 수를 뜻하는 precision 대신 축당 비트를 직접 쓴다.
+     */
+    private static final int BITS_PER_AXIS = 15;
+
+    private static final long MAX_GRID_INDEX = (1L << BITS_PER_AXIS) - 1;   // 클램핑용
 
     @Override
     public int toPageId(double lat, double lng) {
-        return (int) GeoHash.toMorton(lat, lng, PRECISION);
+        return (int) GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
     }
 
     /**
@@ -31,15 +40,15 @@ public class GeoHashIndex implements SpatialIndex {
         double maxLng = lng + deltaDegreeX;
 
         // 위도/경도를 직접 비트로 변환 (deinterleave 사용 안 함)
-        long minLatBits = Math.max(0, latToBits(minLat, PRECISION) - 1);
-        long maxLatBits = Math.min((1L << 15) - 1, latToBits(maxLat, PRECISION) + 1);
-        long minLngBits = Math.max(0, lngToBits(minLng, PRECISION) - 1);
-        long maxLngBits = Math.min((1L << 15) - 1, lngToBits(maxLng, PRECISION) + 1);
+        long minLatBits = Math.max(0, latToBits(minLat) - 1);
+        long maxLatBits = Math.min(MAX_GRID_INDEX, latToBits(maxLat) + 1);
+        long minLngBits = Math.max(0, lngToBits(minLng) - 1);
+        long maxLngBits = Math.min(MAX_GRID_INDEX, lngToBits(maxLng) + 1);
 
         List<Integer> pageIds = new ArrayList<>();
         for (long latBits = minLatBits; latBits <= maxLatBits; latBits++) {
             for (long lngBits = minLngBits; lngBits <= maxLngBits; lngBits++) {
-                long morton = GeoHash.interleave(lngBits, latBits);
+                long morton = GeoHash.interleave(lngBits, latBits, BITS_PER_AXIS);
                 pageIds.add((int) morton);
             }
         }
@@ -48,18 +57,16 @@ public class GeoHashIndex implements SpatialIndex {
     }
 
     // 위도 → 비트 (0 ~ 2^15 - 1)
-    private long latToBits(double lat, int precision) {
+    private long latToBits(double lat) {
         double ratio = (lat + 90.0) / 180.0;
         ratio = Math.max(0.0, Math.min(1.0, ratio));
-        long maxBits = 1L << (precision * 5 / 2);  // 2^15 = 32768
-        return Math.min((long)(ratio * maxBits), maxBits - 1);
+        return Math.min((long) (ratio * (MAX_GRID_INDEX + 1)), MAX_GRID_INDEX);
     }
 
     // 경도 → 비트 (0 ~ 2^15 - 1)
-    private long lngToBits(double lng, int precision) {
+    private long lngToBits(double lng) {
         double ratio = (lng + 180.0) / 360.0;
         ratio = Math.max(0.0, Math.min(1.0, ratio));
-        long maxBits = 1L << (precision * 5 / 2);  // 2^15 = 32768
-        return Math.min((long)(ratio * maxBits), maxBits - 1);
+        return Math.min((long) (ratio * (MAX_GRID_INDEX + 1)), MAX_GRID_INDEX);
     }
 }
