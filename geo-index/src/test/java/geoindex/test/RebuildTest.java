@@ -38,13 +38,12 @@ class RebuildTest {
         geoindex.storage.Page page = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(page);
         geoindex.storage.PageLayout.writeRecord(page, "B0001".getBytes());
-        dm.writePage(page);
+        dm.savePage(page);
 
         dm.rebuild(tempDm -> {});
 
-        geoindex.storage.Page after = dm.readPage(1);
-        assertFalse(geoindex.storage.PageLayout.isInitialized(after),
-                "rebuild 후 기존 페이지는 없어야 한다");
+        geoindex.storage.Page after = dm.loadPage(1);
+        assertNull(after, "rebuild 후 기존 페이지는 없어야 한다");
 
         dm.close();
         System.out.println("DiskManager rebuild 후 기존 데이터 사라짐 ✅");
@@ -57,16 +56,16 @@ class RebuildTest {
         geoindex.storage.Page old = new geoindex.storage.Page(1);
         geoindex.storage.PageLayout.initializePage(old);
         geoindex.storage.PageLayout.writeRecord(old, "OLD".getBytes());
-        dm.writePage(old);
+        dm.savePage(old);
 
         dm.rebuild(tempDm -> {
             geoindex.storage.Page newPage = new geoindex.storage.Page(1);
             geoindex.storage.PageLayout.initializePage(newPage);
             geoindex.storage.PageLayout.writeRecord(newPage, "NEW".getBytes());
-            tempDm.writePage(newPage);
+            tempDm.savePage(newPage);
         });
 
-        geoindex.storage.Page read = dm.readPage(1);
+        geoindex.storage.Page read = dm.loadPage(1);
         assertEquals("NEW", new String(geoindex.storage.PageLayout.readRecord(read, 0)));
 
         dm.close();
@@ -83,13 +82,13 @@ class RebuildTest {
         DiskManager dm = new DiskManager(TEST_FILE, metrics);
         CacheManager cm = new CacheManager(dm, metrics);
 
-        geoindex.storage.Page page = cm.getPage(5);
+        geoindex.storage.Page page = cm.getOrCreatePage(5);
         page.getData()[0] = 42;
-        cm.putPage(page);
+        page.markDirty();
 
         cm.rebuild(tempCm -> {});
 
-        geoindex.storage.Page after = cm.getPage(5);
+        geoindex.storage.Page after = cm.getOrCreatePage(5);
         assertNotSame(page, after, "rebuild 후 버퍼가 비워져 새 인스턴스여야 한다");
         assertEquals(0, after.getData()[0], "rebuild 후 기존 데이터가 없어야 한다");
 

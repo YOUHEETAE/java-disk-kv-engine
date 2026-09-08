@@ -5,6 +5,8 @@ import geoindex.buffer.CacheManager;
 import geoindex.index.GeoHashIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
+import geoindex.storage.Page;
+import geoindex.storage.PageLayout;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -108,6 +110,54 @@ class SpatialRecordManagerTest {
 
         // 빈 pageId는 포함되면 안 됨
         result.forEach((pageId, codes) -> assertFalse(codes.isEmpty()));
+    }
+
+    /**
+     * overflow 링크만 바뀐 페이지도 flush 되어야 한다.
+     *
+     * 페이지가 꽉 차면 writeRecord 는 -1 을 반환하고 페이지를 건드리지 않는다.
+     * 이어서 setOverflowPageId 가 헤더 4바이트만 고치는데, 이 호출이 dirty 를 남기지
+     * 않으면 직전 flush 로 표시가 꺼진 페이지는 깨끗한 채로 남아 다음 flush 가 건너뛴다.
+     * 링크가 파일에 안 실리므로 캐시를 비우는 순간 체인 뒤쪽이 통째로 사라진다.
+     *
+     * 이 테스트의 핵심은 3번 직전의 flush 다. 그게 없으면 페이지가 계속 dirty 라
+     * setOverflowPageId 의 markDirty 를 지워도 통과한다.
+     *
+     * 채우는 건수를 상수에서 역산하는 이유: 한 건이라도 넘치면 overflow 가 flush 전에
+     * 생겨 버려, 검증하려는 "꽉 찬 채로 flush 된 페이지"라는 조건이 만들어지지 않는다.
+     */
+    @Test
+    void overflow_링크만_바뀐_페이지도_flush된다() {
+        double lat = 37.4979, lng = 127.0276;
+        byte[] filler = "FILL".getBytes();
+
+        // 1. primary 페이지를 정확히 꽉 채운다 (overflow 는 아직 생기지 않는다)
+        int capacity = (Page.PAGE_SIZE - PageLayout.HEADER_SIZE)
+                / (4 + filler.length + PageLayout.SLOT_SIZE);
+        for (int i = 0; i < capacity; i++) {
+            manager.put(lat, lng, filler);
+        }
+        assertEquals(0, manager.getUsedOverflowPageCount(),
+                "이 시점엔 아직 overflow 가 없어야 한다");
+
+        // 2. flush → primary 페이지의 dirty 가 꺼진다
+        cacheManager.flush();
+
+        // 3. 한 건 더 — writeRecord 는 -1, setOverflowPageId 만 페이지를 바꾼다
+        manager.put(lat, lng, "AFTER_FLUSH".getBytes());
+        assertEquals(1, manager.getUsedOverflowPageCount(),
+                "여기서 overflow 가 생겨야 한다");
+
+        // 4. flush → 링크가 파일에 실려야 한다
+        cacheManager.flush();
+
+        // 5. 캐시를 비워 파일에서만 읽게 한다
+        cacheManager.clearCache();
+
+        List<String> codes = manager.getAllCodesByPageId(new GeoHashIndex().toPageId(lat, lng));
+        assertTrue(codes.contains("AFTER_FLUSH"),
+                "flush 이후에 붙은 overflow 체인이 파일에 남아야 한다");
+        assertEquals(capacity + 1, codes.size(), "체인 전체가 읽혀야 한다");
     }
 
     @Test

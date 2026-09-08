@@ -36,7 +36,7 @@ class CacheManagerTest {
 
     @Test
     void  testGetPageCreatesNewPage (){
-        Page page = cacheManager.getPage(0);
+        Page page = cacheManager.getOrCreatePage(0);
         assertNotNull(page);
         assertEquals(0, page.getPageId());
         assertFalse(page.isDirty());
@@ -44,20 +44,20 @@ class CacheManagerTest {
 
     @Test
     void testCacheHits(){
-        Page page1 =  cacheManager.getPage(5);
-        Page page2 =  cacheManager.getPage(5);
+        Page page1 =  cacheManager.getOrCreatePage(5);
+        Page page2 =  cacheManager.getOrCreatePage(5);
         assertSame(page1, page2);
     }
 
     @Test
-    void testPutPage(){
-        Page page1 = cacheManager.getPage(7);
+    void testDirtyPageStaysInCache(){
+        Page page1 = cacheManager.getOrCreatePage(7);
         page1.getData()[0] = 42;
         page1.getData()[1] = 43;
-        cacheManager.putPage(page1);
+        page1.markDirty();
         assertTrue(page1.isDirty());
 
-        Page page2 = cacheManager.getPage(7);
+        Page page2 = cacheManager.getOrCreatePage(7);
         assertSame(page1, page2);
         assertEquals(42, page2.getData()[0]);
         assertEquals(43, page2.getData()[1]);
@@ -65,10 +65,10 @@ class CacheManagerTest {
 
     @Test
     void testDiskPersistence(){
-        Page page1 = cacheManager.getPage(7);
+        Page page1 = cacheManager.getOrCreatePage(7);
         page1.getData()[0] = 77;
         page1.getData()[1] = 88;
-        cacheManager.putPage(page1);
+        page1.markDirty();
 
         cacheManager.close();
 
@@ -77,7 +77,7 @@ class CacheManagerTest {
         diskManager = new DiskManager(TEST_FILE, metrics);
         cacheManager = new CacheManager(diskManager, metrics);
 
-        Page page2 = cacheManager.getPage(7);
+        Page page2 = cacheManager.getOrCreatePage(7);
 
         assertEquals(77,page2.getData()[0]);
         assertEquals(88,page2.getData()[1]);
@@ -85,21 +85,21 @@ class CacheManagerTest {
 
     @Test
     void testMultiplePages(){
-        Page page1 = cacheManager.getPage(7);
-        Page page2 = cacheManager.getPage(8);
-        Page page3 = cacheManager.getPage(9);
+        Page page1 = cacheManager.getOrCreatePage(7);
+        Page page2 = cacheManager.getOrCreatePage(8);
+        Page page3 = cacheManager.getOrCreatePage(9);
 
         page1.getData()[0] = 77;
         page2.getData()[0] = 88;
         page3.getData()[0] = 99;
 
-        cacheManager.putPage(page1);
-        cacheManager.putPage(page2);
-        cacheManager.putPage(page3);
+        page1.markDirty();
+        page2.markDirty();
+        page3.markDirty();
 
-        Page cached1 = cacheManager.getPage(7);
-        Page cached2 = cacheManager.getPage(8);
-        Page cached3 = cacheManager.getPage(9);
+        Page cached1 = cacheManager.getOrCreatePage(7);
+        Page cached2 = cacheManager.getOrCreatePage(8);
+        Page cached3 = cacheManager.getOrCreatePage(9);
 
         assertEquals(77,page1.getData()[0]);
         assertEquals(88,page2.getData()[0]);

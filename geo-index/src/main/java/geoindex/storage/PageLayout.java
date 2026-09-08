@@ -40,9 +40,13 @@ public class PageLayout {
     /**
      * 이 페이지가 한 번이라도 초기화됐는지.
      *
-     * DiskManager 는 파일에 없는 pageId 에 대해 전부 0 인 빈 Page 를 돌려준다.
-     * magic 이 없으면 그 빈 페이지와 "레코드가 0개인 정상 페이지"를 구분할 수 없다.
-     * 이 값이 유일한 구분자다.
+     * 파일에 있는 페이지는 flush 를 거쳤으므로 정상 경로에서는 항상 true 다.
+     * false 가 나오는 경로는 둘뿐이다.
+     *   - savePage 가 매핑 엔트리만 쓰고 데이터를 쓰기 전에 중단됐다 (그 영역이 전부 0)
+     *   - DiskManager 를 직접 써서 초기화하지 않은 페이지를 저장했다 (테스트)
+     *
+     * 즉 일상적인 판별자가 아니라 손상 감지용 불변식 확인이다. 안 걸린다고 지우면
+     * 미완성 쓰기를 "레코드 0개인 정상 페이지"로 읽어, 그 칸의 데이터가 조용히 사라진다.
      */
     public static boolean isInitialized(Page page) {
         return page.buffer().getInt(OFFSET_MAGIC) == 0xCAFEBABE;
@@ -127,8 +131,16 @@ public class PageLayout {
         return page.buffer().getInt(OFFSET_OVERFLOW);
     }
 
+    /**
+     * 여기서만 markDirty 를 부르는 이유: 나머지 세터는 private 이라 writeRecord ·
+     * initializePage 안에서만 불리고 그 끝에서 함께 표시된다. 이 세터만 public 이라
+     * SpatialRecordManager 가 단독으로 부르므로, 스스로 표시하지 않으면
+     * 이 호출이 유일한 변경인 페이지(꽉 차서 writeRecord 가 -1 을 낸 경우)가
+     * flush 를 건너뛴다.
+     */
     public static void setOverflowPageId(Page page, int pageId) {
         page.buffer().putInt(OFFSET_OVERFLOW, pageId);
+        page.markDirty();
     }
 
     public static int getRecordCount(Page page) {
