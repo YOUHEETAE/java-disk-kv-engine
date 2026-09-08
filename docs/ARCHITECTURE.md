@@ -230,8 +230,6 @@ timeline
         Phase 2 : GeoHash / GeoHashIndex
         Phase 3 : SpatialRecordManager
         Phase 4 : Benchmark - Full Scan vs Geohash
-        Phase 5 : HilbertCurve / HilbertIndex
-        Phase 6 : Benchmark 최종 3방향 비교
     section 🔮 고도화
         Phase 7 : 원형 교차 격자 계산
         Phase 8 : B-Tree 인덱스 (선택)

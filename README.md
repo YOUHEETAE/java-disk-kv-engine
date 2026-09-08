@@ -148,20 +148,20 @@ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
 
 → 설계 개선 상세 기록: [GEOHASH_IMPLEMENTATION.md](./geo-index/src/main/java/geoindex/index/GEOHASH_IMPLEMENTATION.md)
 
-### Hilbert Multi-Interval Query
+### Hilbert 곡선 — 고려했으나 채택하지 않음
 
-```
-① 반경 안 격자(x, y) 순회
-② 각 격자 → 힐버트값 → pageId 마킹
-③ pageId 연속 구간 → Interval Merge
-④ disjoint interval별 pageId 범위만 읽기
-```
+Z-곡선은 격자 경계에서 값이 크게 점프한다. Hilbert 곡선은 그 점프가 없어
+공간 인접성이 더 잘 보존되므로 구현해 비교했고, 두 가지 이유로 제거했다.
 
-힐버트 곡선 위 interval 분포 (강남 반경 5km):
-```
-[3766], [3772~3773], [3775], [3879~3884], [3889~3890]
-→ 5개 disjoint interval, pageId 12개만 I/O
-```
+- **이점이 나오는 지점까지 가지 않았다.** 실질 이득은 조회 범위를 연속 구간으로
+  병합하는 Multi-Interval Query에서 나오는데, 구현은 격자 열거에서 멈췄다.
+- **비교 조건이 달랐다.** Hilbert 쪽은 힐버트값 약 10만 개를 페이지 하나로 묶었고
+  GeoHash는 Morton 값 자체를 pageId로 썼다. "pageId 13개 vs 187개"는 곡선이 아니라
+  **페이지 크기의 차이**였다.
+
+현 규모에서는 파일이 OS 페이지 캐시에 통째로 올라가 seek 거리가 응답 시간에
+드러나지 않는다. 곡선보다 격자 크기와 파일 배치 순서가 먼저 영향을 준다고 보고
+Z-곡선을 유지했다. 코드는 git 이력에 남아 있다.
 
 ### JVM 캐시 + rebuild()
 
@@ -223,7 +223,10 @@ rebuild(loader ->
 
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
 - **GeoHash**: 공간 밀도에 의존 O(P) → 대규모 데이터에서도 일정한 검색 성능 유지
-- **Hilbert**: Multi-Interval Query로 필요한 pageId만 정확히 탐색
+
+> 위 차트는 Hilbert 제거 이전에 측정한 것이라 Hilbert 계열이 함께 그려져 있다.
+> 또한 두 경로는 저장하는 값이 다르다 — Full Scan은 레코드 전체를, GeoHash 경로는
+> 병원 코드만 담는다. 배수에는 색인 효과와 저장 대상 차이가 함께 들어 있다.
 
 ### 실서비스 벤치마크 (실제 한국 병원 79,081건)
 
@@ -651,13 +654,9 @@ geo-index/
     SpatialIndex.java       인터페이스
     GeoHash.java            Morton 코드 인코딩 (toMorton / interleave)
     GeoHashIndex.java       Morton 직접 pageId 매핑
-    HilbertCurve.java       힐버트 곡선 계산
-    HilbertIndex.java       Multi-Interval Query 구현
-    HilbertIndexDebug.java  힐버트 인덱스 디버그 유틸
   benchmark/
     FullScanBenchmark.java
     GeoHashBenchmark.java
-    HilbertBenchmark.java
     BenchmarkRunner.java
   util/
     GeoUtils.java           Haversine 거리 계산
@@ -687,8 +686,8 @@ geo-index/
 ✅ Phase 1: Storage (Page, DiskManager, CacheManager)
 ✅ Phase 2: API (RecordManager, PageLayout)
 ✅ Phase 3: GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
-✅ Phase 4: Benchmark (Full Scan vs GeoHash vs Hilbert)
-✅ Phase 5: Hilbert Multi-Interval Query + Seek Count 비교
+✅ Phase 4: Benchmark (Full Scan vs GeoHash)
+✅ Phase 5: Hilbert 곡선 구현 · 비교 (미채택 → 제거)
 ✅ Phase 6: DiskManager sparse 매핑 테이블
 ✅ Phase 7: Morton 코드 직접 pageId 매핑 (pageId 분산 187개)
 ✅ Phase 8: 실제 병원 데이터 연동 + A/B 벤치마크 (50회 평균)

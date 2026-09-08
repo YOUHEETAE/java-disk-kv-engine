@@ -1,6 +1,6 @@
 # Benchmark 모듈
 
-공간 인덱스 성능 측정 - Full Scan vs GeoHash vs Hilbert 3방향 비교
+공간 인덱스 성능 측정 - Full Scan vs GeoHash
 
 ---
 
@@ -28,17 +28,21 @@
 
 ## 더미 데이터 결과 (규모별)
 
-| 건수 | Full Scan | GeoHash | Hilbert |
-|------|----------|---------|---------|
-| 10,000 | 100ms | < 1ms | 29ms |
-| 20,000 | 133ms | < 1ms | 33ms |
-| 30,000 | 259ms | 2ms | 32ms |
-| 50,000 | 292ms | < 1ms | 33ms |
-| 79,081 | 434ms | < 1ms | 33ms |
-| 100,000 | 528ms | < 1ms | 47ms |
-| 200,000 | 660ms | 3ms | 24ms |
-| 500,000 | 768ms | < 1ms | 24ms |
-| 1,000,000 | 1,177ms | 6ms | 34ms |
+| 건수 | Full Scan | GeoHash |
+|------|----------|---------|
+| 10,000 | 100ms | < 1ms |
+| 20,000 | 133ms | < 1ms |
+| 30,000 | 259ms | 2ms |
+| 50,000 | 292ms | < 1ms |
+| 79,081 | 434ms | < 1ms |
+| 100,000 | 528ms | < 1ms |
+| 200,000 | 660ms | 3ms |
+| 500,000 | 768ms | < 1ms |
+| 1,000,000 | 1,177ms | 6ms |
+
+> 두 경로는 저장하는 값이 다르다. Full Scan은 `Hospital` 레코드 전체를 담고
+> 8만 건 전부에 haversine을 돌리며, GeoHash 경로는 병원 코드만 담고 후보
+> 페이지만 읽는다. 배수에는 색인 효과와 **저장 대상 차이**가 함께 들어 있다.
 
 ---
 
@@ -146,27 +150,22 @@ Mixed가 가장 현실적인 시나리오입니다. 24.6배 개선 달성.
 | 방식 | PageId 수 | 후보 수 |
 |------|----------|--------|
 | Full Scan | 전체 | 79,081건 |
-| GeoHash | 187 | 1,366건 |
-| **Hilbert Multi-Interval** | **12** | **103건** |
+| GeoHash | 247 | 1,366건 |
+
+> 247칸 중 실재하는 칸은 약 52개다. 나머지는 반경을 덮는 격자에서 나온
+> 번호일 뿐 아무도 쓴 적이 없다. 이 비율은 [Index 모듈 README](../index/README.md)
+> 참고.
 
 ---
 
-## Page Seek Count 비교
+## Seek Count 측정에 대하여
 
-```
-GeoHash:  PageId 187개 → Seek Count 720
-Hilbert:  PageId  12개 → Seek Count 124
+곡선별 Seek Count 비교표가 있었으나 제거했다. `|pageId[i+1] − pageId[i]|`를
+재고 있었는데, 이는 **인덱스가 만든 번호 사이의 거리**일 뿐 파일 배치와 무관하다.
+디스크 seek을 재려면 `pageMap`이 배정한 **파일 오프셋 간 거리**를 봐야 한다.
 
-Hilbert가 GeoHash 대비 Seek Count 5.8배 적음
-```
-
-```
-GeoHash:  [5 → 402 → 11 → 390 → ...]  ← 분산된 랜덤 I/O
-Hilbert:  [3766 → 3772 → 3773 → ...]  ← 연속 순차 I/O
-```
-
-Seek Count = 인접 PageId 간 거리(`|p[i+1] - p[i]|`) 합계
-→ 낮을수록 디스크 헤드 이동 최소화 → HDD 환경에서 유리
+flush를 pageId 순으로 정렬하도록 바꾼 뒤에도 이 지표는 변하지 않는다 —
+측정 대상이 애초에 달랐기 때문이다. 오프셋 기준 측정은 별도 과제로 남아 있다.
 
 ---
 
@@ -178,9 +177,7 @@ benchmark/
   DummyDataGenerator.java        더미 데이터 생성 (SEED=42)
   FullScanBenchmark.java         Full Scan 측정
   GeohashBenchmark.java          GeoHash 측정
-  HilbertBenchmark.java          Hilbert 측정
-  BenchmarkRunner.java           3방향 비교 + Seek Count 비교 실행
-  SeekCountBenchmark.java        PageId 목록 → Seek Count 계산
+  BenchmarkRunner.java           규모별 비교 실행
 
 spring-app/
   HospitalSearchBenchmark.java   실제 병원 데이터 3종 벤치마크

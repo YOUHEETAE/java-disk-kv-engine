@@ -1,6 +1,6 @@
 # Index 모듈
 
-공간 인덱스 구현 - GeoHash (Morton 코드) / Hilbert Multi-Interval Query
+공간 인덱스 구현 - GeoHash (Morton 코드)
 
 ---
 
@@ -144,81 +144,38 @@ public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
 
 ---
 
-## Hilbert
+## Hilbert — 고려했으나 채택하지 않음
 
-### HilbertCurve.java
+Z-곡선(Morton)은 격자 경계에서 힐버트값이 크게 점프한다. Hilbert 곡선은 그 점프가
+없어 공간 인접성이 1차원에서 더 잘 보존되므로, `HilbertCurve` / `HilbertIndex`를
+구현해 비교했다. 결과적으로 채택하지 않고 제거했다(코드는 git 이력에 남아 있다).
 
-| 메서드 | 역할 |
-|--------|------|
-| `encode(lat, lng)` | 좌표 → 힐버트값 |
-| `encodeGrid(x, y)` | 격자 좌표 → 힐버트값 (getPageIds 내부용) |
-| `toGridX(lng)` | 경도 → 격자 x |
-| `toGridY(lat)` | 위도 → 격자 y |
+**이유 1 — 이점이 나오는 지점까지 가지 않았다.**
 
-```
-ORDER = 15 → 32768×32768 격자
-힐버트값 범위: 2^30 ≈ 10억
-```
+Hilbert의 실질 이득은 조회 범위를 연속 구간 몇 개로 병합하는 Multi-Interval
+Query에서 나온다. 구현은 "격자를 순회하며 pageId를 표시하고, 표시된 것을 모아
+반환"하는 데서 멈췄다. 이름이 코드보다 앞서 있었던 셈이고, 그 상태에서는 반환
+형태가 GeoHash와 다르지 않다.
 
-### HilbertIndex.java - Multi-Interval Query
+**이유 2 — 비교 조건이 동일하지 않았다.**
 
-**toPageId (삽입):**
+측정치의 대부분은 곡선이 아니라 파라미터 차이에서 나왔다.
 
-```
-힐버트값 / RANGE_PER_PAGE → PageId
+| | GeoHash | Hilbert |
+|---|---|---|
+| pageId 결정 | Morton 값 자체 | 힐버트값 / 107,374 |
+| 페이지 하나가 덮는 범위 | 격자 한 칸 | 격자 약 10만 칸 |
+| 좌표계 | 전지구 | 한국 박스 |
 
-% MAX_PAGE       → 힐버트 연속성 파괴 → Full Scan 退化
-/ RANGE_PER_PAGE → 선형 분할 → 연속성 보존
-```
+"pageId 13개 vs 187개"는 **페이지 크기가 달랐던 것**이다. 같은 넓이를 굵은
+페이지로 덮으면 당연히 개수가 준다. 곡선을 바꾼 효과와 분리되지 않는 수치라
+근거로 쓸 수 없다고 판단했다.
 
-**getPageIds (검색):**
+**지금의 결론**
 
-```
-① 중심 격자 (cx, cy) 계산
-② 사각형 MBR 격자 순회 (stepsY × stepsX)
-③ encodeGrid(x, y) → 힐버트값 → pageId visited 마킹
-④ visited[10000] 배열 순회 → Interval Merge
-⑤ disjoint interval → pageId 목록 반환
-```
-
-**왜 Multi-Interval인가?**
-
-```
-원형 영역은 힐버트 곡선 위에서 하나의 연속 구간이 아님
-→ 사분면 경계에서 힐버트값이 크게 점프
-→ 여러 disjoint interval로 쪼개짐
-
-강남 반경 5km 실측:
-  [3766], [3772~3773], [3775], [3879~3884], [3889~3890]
-  → 5개 interval, pageId 13개
-
-선형 범위: pageId 275개 (엉뚱한 지역 포함)
-GeoHash:   pageId 187개
-Hilbert:   pageId  13개 ← 힐버트의 진짜 강점
-```
-
----
-
-## 방식별 비교
-
-| 항목 | GeoHash | Hilbert |
-|------|---------|---------|
-| **pageId 수** | 187개 | 13개 |
-| **후보 수** | 1,366건 | 103건 |
-| **검색 시간** | < 1ms | 33~37ms |
-| **getPageIds 연산** | 187번 | 671만 번 |
-| **interval 수** | 분산 | 5개 |
-| **Seek Count** | 720 | 124 |
-
-**트레이드오프:**
-
-```
-GeoHash:  연산 적음 → 빠름 / pageId 많음 → I/O 많음
-Hilbert:  연산 많음 → 느림 / pageId 적음 → I/O 최소
-
-SSD 소규모 환경:  GeoHash 유리 (< 1ms vs 33ms)
-HDD 대용량 환경:  Hilbert 유리 (pageId 13개 × 순차 I/O)
-```
+현재 규모에서는 파일 전체가 OS 페이지 캐시에 올라가 seek 거리가 응답 시간에
+드러나지 않는다. 곡선 선택보다 **격자 크기와 파일 배치 순서**가 먼저 영향을 준다.
+후자는 flush를 pageId 순으로 바꿔 이미 처리했고, 전자는 별도 과제로 남아 있다.
 
 ---
 
@@ -229,10 +186,6 @@ index/
   SpatialIndex.java             인터페이스
   GeoHash.java                  Morton 코드 계산 로직
   GeoHashIndex.java             Morton 직접 pageId 매핑
-  HilbertCurve.java             힐버트 곡선 계산 로직
-  HilbertIndex.java             Multi-Interval Query 구현
-  HilbertIndexDebug.java        힐버트 인덱스 디버그 유틸
-  HILBERT_IMPLEMENTATION.md     힐버트 구현 과정 상세 기록
   GEOHASH_IMPLEMENTATION.md     GeoHash 설계 개선 과정 상세 기록
 ```
 
@@ -242,8 +195,6 @@ index/
 
 ```
 GeoHashIndex  → GeoHash
-HilbertIndex  → HilbertCurve
 GeoHashIndex  implements SpatialIndex
-HilbertIndex  implements SpatialIndex
 SpatialRecordManager → SpatialIndex (주입)
 ```

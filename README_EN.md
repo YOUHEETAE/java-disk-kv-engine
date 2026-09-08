@@ -143,20 +143,23 @@ v4: Morton direct pageId + sparse mapping table → 187 pageIds distributed ✅
 
 → Full design history: [GEOHASH_IMPLEMENTATION.md](./geo-index/src/main/java/geoindex/index/GEOHASH_IMPLEMENTATION.md)
 
-### Hilbert Multi-Interval Query
+### Hilbert Curve - Evaluated, Not Adopted
 
-```
-① Enumerate grid cells (x, y) within radius
-② Each cell → Hilbert value → mark pageId
-③ Contiguous pageId ranges → Interval Merge
-④ Read only disjoint interval ranges
-```
+The Z-curve jumps sharply at grid boundaries. The Hilbert curve has no such jumps
+and preserves spatial locality better, so it was implemented and compared. It was
+removed for two reasons.
 
-Hilbert curve interval distribution (Gangnam, 5km radius):
-```
-[3766], [3772~3773], [3775], [3879~3884], [3889~3890]
-→ 5 disjoint intervals, only 12 pageId I/Os
-```
+- **The implementation stopped short of where the benefit appears.** The real gain
+  comes from Multi-Interval Query, which merges the queried range into a few
+  contiguous intervals. What was implemented ended at grid enumeration.
+- **The comparison was not apples to apples.** The Hilbert side grouped roughly
+  100,000 Hilbert values into a single page, while GeoHash used the Morton value
+  itself as the pageId. "13 pageIds vs 187" was a difference in **page size**,
+  not in the curve.
+
+At the current scale the whole file fits in the OS page cache, so seek distance
+does not surface in response time. Grid size and file layout order matter before
+curve choice, so the Z-curve was kept. The code remains in git history.
 
 ### JVM Cache + rebuild()
 
@@ -253,7 +256,11 @@ Batch Load + pendingLoads:
 
 - **Full Scan**: Linear growth O(N) with data size
 - **GeoHash**: Depends on spatial density O(P) → consistent search performance at scale
-- **Hilbert**: Multi-Interval Query reads only the necessary pageIds
+
+> The chart was measured before Hilbert was removed, so a Hilbert series is still
+> plotted. Note also that the two paths store different values - Full Scan holds the
+> whole record, the GeoHash path only the hospital code. The ratio therefore mixes
+> the indexing effect with a difference in what is stored.
 
 ### Production Benchmark (79,081 real Korean hospital records)
 
@@ -643,13 +650,9 @@ geo-index/
     SpatialIndex.java       Interface
     GeoHash.java            Morton code encoding (toMorton / interleave)
     GeoHashIndex.java       Morton direct pageId mapping
-    HilbertCurve.java       Hilbert curve computation
-    HilbertIndex.java       Multi-Interval Query implementation
-    HilbertIndexDebug.java  Hilbert index debug utility
   benchmark/
     FullScanBenchmark.java
     GeoHashBenchmark.java
-    HilbertBenchmark.java
     BenchmarkRunner.java
   util/
     GeoUtils.java           Haversine distance calculation
@@ -679,8 +682,8 @@ geo-index/
 ✅ Phase 1:  Storage (Page, DiskManager, CacheManager)
 ✅ Phase 2:  API (RecordManager, PageLayout)
 ✅ Phase 3:  GeoHash (GeoHash, GeoHashIndex, SpatialRecordManager)
-✅ Phase 4:  Benchmark (Full Scan vs GeoHash vs Hilbert)
-✅ Phase 5:  Hilbert Multi-Interval Query + Seek Count comparison
+✅ Phase 4:  Benchmark (Full Scan vs GeoHash)
+✅ Phase 5:  Hilbert curve implementation & comparison (not adopted, removed)
 ✅ Phase 6:  DiskManager sparse mapping table
 ✅ Phase 7:  Morton direct pageId mapping (187 distributed pageIds)
 ✅ Phase 8:  Real hospital data integration + A/B benchmark (50-run avg)
