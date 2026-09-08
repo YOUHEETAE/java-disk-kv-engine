@@ -4,6 +4,9 @@ import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
 import geoindex.storage.Page;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheManager {
@@ -18,27 +21,64 @@ public class CacheManager {
 
 
 
-    public Page getPage(int pageId) {
-        return cache.computeIfAbsent(pageId, diskManager::readPage);
+    /**
+     * 캐시 → 파일 순으로 찾는다. 어느 쪽에도 없으면 null — 읽기 경로 전용.
+     *
+     * 검색이 훑는 pageId 는 저장된 데이터가 아니라 반경을 덮는 격자에서 나온다.
+     * 그래서 조회 한 번에 "아무도 쓴 적 없는 칸"이 대량으로 섞인다(실측 79%).
+     * 그 칸마다 빈 Page 를 만들면 4KB 씩 캐시에 눌러앉고, 회수는 rebuild 밖에 없다.
+     *
+     * computeIfAbsent 는 매핑 함수가 null 을 반환하면 저장하지 않고 null 을 돌려준다.
+     * "없으면 캐시에 넣지 않는다"가 별도 분기 없이 성립하는 이유다.
+     */
+    public Page findPage(int pageId) {
+        return cache.computeIfAbsent(pageId, diskManager::loadPage);
     }
 
-
-    public void putPage(Page page) {
-        synchronized (page) {
-            page.markDirty();
-        }
-        cache.put(page.getPageId(), page);
+    /**
+     * 캐시 → 파일 순으로 찾고, 그래도 없으면 새로 만든다 — 쓰기 경로 전용.
+     * 현재 운영 호출자는 rebuild 안의 put 하나뿐이다. 읽기는 findPage 를 쓴다.
+     *
+     * 앞의 두 단계를 건너뛰고 항상 새로 만들면 안 된다. 이미 레코드가 든 페이지를 덮으면
+     * initializePage 가 recordCount 를 0 으로 되돌리고 flush 가 그대로 파일에 써서,
+     * 기존 레코드가 예외 없이 사라진다.
+     */
+    public Page getOrCreatePage(int pageId){
+        return cache.computeIfAbsent(pageId, id -> {
+            Page page = diskManager.loadPage(id);
+            return page != null ? page : new Page(id);
+        });
     }
 
+    /**
+     * pageId 순으로 쓰는 이유: pageId 가 Morton 코드라 오름차순이 곧 Z-곡선 순서다.
+     * savePage 는 처음 보는 pageId 에만 offset 을 이어 붙이므로, 전부 새 페이지인
+     * rebuild 에서 파일 배치가 공간 인접성을 따라간다. 해시 순서로 쓰면 인덱스가
+     * 만들어낸 인접성이 파일에서 사라져, 반경 쿼리가 파일 전체에 흩어진 seek 이 된다.
+     *
+     * 다만 overflow 페이지는 별도 번호 공간(32,768~)이라 자기 primary 와 멀리 떨어진다.
+     * 체인이 있는 칸의 지역성은 이 정렬로 해결되지 않는다.
+     */
     public void flush() {
         engineMetrics.incrementFlushCount();
-        for (Page page : cache.values()) {
-            synchronized (page) {
-                if (page.isDirty()) {
-                    diskManager.writePage(page);
-                    page.clearDirty();
-                    engineMetrics.incrementFlushedPages();
-                }
+        List<Page> pages = new ArrayList<>(cache.values());
+        pages.sort(Comparator.comparingInt(Page::getPageId));
+        for (Page page : pages) {
+            // 락 없이 쓴다. 예전엔 synchronized (page) 가 있었지만 쓰기 경로가 잡는 것은
+            // SpatialRecordManager 의 pageLocks(RWLock)라 별개 객체였고, 상호배제는
+            // 같은 락 객체를 잡을 때만 성립하므로 아무것도 막지 못했다. 락처럼 보여
+            // 검토를 통과시키는 쪽이 더 해로워 지웠다.
+            //
+            // 지금 안전한 이유는 flush 가 put 과 겹치지 않게 불리기 때문이다.
+            // 겹치게 하려면 pageLocks 의 키를 primary 에서 각 pageId 로 내려야 한다 —
+            // flush 는 페이지의 primary 를 모르고 자기 pageId 만 알기 때문이다.
+            // 그러면 flush 가 readLock 을 잡고 같은 락에 참여할 수 있다. 대신 체인이
+            // 한 문 뒤에 있지 못하니, append 를 "overflow 페이지를 완성한 뒤 링크를
+            // 건다"로 뒤집어야 독자가 빈 페이지를 보지 않는다.
+            if (page.isDirty()) {
+                diskManager.savePage(page);
+                page.clearDirty();
+                engineMetrics.incrementFlushedPages();
             }
         }
     }

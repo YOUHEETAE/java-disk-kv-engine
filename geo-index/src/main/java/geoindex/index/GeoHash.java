@@ -2,15 +2,13 @@ package geoindex.index;
 
 public class GeoHash {
 
-    private static final int BITS = 15;
 
-
-    public static long toMorton(double lat, double lng, int precision) {
+    public static long toMorton(double lat, double lng, int bitsPerAxis) {
         double minLat = -90,  maxLat = 90;
         double minLng = -180, maxLng = 180;
 
         long morton = 0;
-        int totalBits = precision * 5;
+        int totalBits = bitsPerAxis * 2;
         boolean isLng = true;
 
         for (int i = 0; i < totalBits; i++) {
@@ -29,9 +27,9 @@ public class GeoHash {
     }
 
     // latBits/lngBits → Morton 재조합
-    public static long interleave(long lngBits, long latBits) {
+    public static long interleave(long lngBits, long latBits, int bitsPerAxis) {
         long morton = 0;
-        for (int i = BITS - 1; i >= 0; i--) {
+        for (int i = bitsPerAxis - 1; i >= 0; i--) {
             morton = (morton << 1) | ((lngBits >> i) & 1);
             morton = (morton << 1) | ((latBits >> i) & 1);
         }

@@ -9,7 +9,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GeohashIndexTest {
-    static final int PRECISION = 7;
+    /** GeoHashIndex.BITS_PER_AXIS 와 같은 값. 운영과 다른 해상도를 검증하지 않기 위해 맞춘다. */
+    static final int BITS_PER_AXIS = 15;
 
     GeoHashIndex index = new GeoHashIndex();
 
@@ -41,57 +42,26 @@ class GeohashIndexTest {
         List<Integer> pageIds = index.getPageIds(37.4979, 127.0276, 5.0);
         assertTrue(pageIds.contains(gangnam));
     }
+    /**
+     * pageId 는 int 로 다뤄지므로 Morton 값이 int 양수 범위를 넘으면 안 된다.
+     * Morton 비트 수 = BITS_PER_AXIS × 2 이므로, 축당 16비트 이상으로 올리면 여기서 걸린다.
+     *
+     * 기존 debug* 메서드들을 대체한다 — 값을 출력만 하고 아무것도 검증하지 않아
+     * 회귀를 잡지 못했다. 실제로 그 자리에서 축당 17비트(precision 7)를 쓰고 있었다.
+     */
     @Test
-    void debugPageIds() {
-        GeoHashIndex index = new GeoHashIndex();
-        double lat = 37.420964;
-        double lng = 127.126865;
-        double radius = 5.0;
+    void pageId가_int_양수_범위에_들어간다() {
+        double[][] points = {
+                {33.0, 124.0}, {33.0, 132.0}, {38.6, 124.0}, {38.6, 132.0},  // 한국 박스 네 꼭짓점
+                {-90.0, -180.0}, {90.0, 180.0},                              // 좌표계 극단
+        };
 
-        List<Integer> pageIds = index.getPageIds(lat, lng, radius);
-        System.out.println("=== pageId 분포 ===");
-        System.out.println("총 pageIds 수: " + pageIds.size());
-        System.out.println("min pageId: " + pageIds.stream().mapToInt(i->i).min().getAsInt());
-        System.out.println("max pageId: " + pageIds.stream().mapToInt(i->i).max().getAsInt());
-        System.out.println("pageId 범위: " + (pageIds.stream().mapToInt(i->i).max().getAsInt()
-                - pageIds.stream().mapToInt(i->i).min().getAsInt()));
-    }
-    @Test
-    void debugMorton() {
-        long morton = GeoHash.toMorton(37.420964, 127.126865, 7);
-        System.out.println("morton: " + morton);
-        System.out.println("morton 2진수: " + Long.toBinaryString(morton));
-        System.out.println("morton 비트 수: " + Long.toBinaryString(morton).length());
-        System.out.println(">> 20: " + (morton >> 20));
-    }
-
-    @Test
-    void debugBitDiff() {
-        long m1 = GeoHash.toMorton(37.37, 127.07, 7);
-        long m2 = GeoHash.toMorton(37.46, 127.18, 7);
-
-        System.out.println("m1: " + Long.toBinaryString(m1));
-        System.out.println("m2: " + Long.toBinaryString(m2));
-
-        // 몇 번째 비트부터 차이나는지
-        for (int i = 34; i >= 0; i--) {
-            long bit1 = (m1 >> i) & 1;
-            long bit2 = (m2 >> i) & 1;
-            if (bit1 != bit2) {
-                System.out.println("처음 차이나는 비트: " + i + "번째");
-                break;
-            }
-        }
-    }
-    @Test
-    void debugMortonRange() {
-        for (int precision : new int[]{6, 7, 8}) {
-            long minMorton = GeoHash.toMorton(33.0, 124.0, precision);
-            long maxMorton = GeoHash.toMorton(38.6, 132.0, precision);
-            System.out.println("PRECISION=" + precision
-                    + " minMorton=" + minMorton
-                    + " maxMorton=" + maxMorton
-                    + " range=" + (maxMorton - minMorton));
+        for (double[] p : points) {
+            long morton = GeoHash.toMorton(p[0], p[1], BITS_PER_AXIS);
+            assertTrue(morton >= 0 && morton <= Integer.MAX_VALUE,
+                    "Morton 이 int 범위를 벗어났다: " + morton + " @ " + p[0] + ", " + p[1]);
+            assertTrue(index.toPageId(p[0], p[1]) >= 0,
+                    "pageId 가 음수다 @ " + p[0] + ", " + p[1]);
         }
     }
 }

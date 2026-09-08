@@ -1,64 +1,39 @@
 package geoindex.benchmark;
 
-import geoindex.index.GeoHashIndex;
-import geoindex.index.HilbertIndex;
-
-import java.util.Collections;
-import java.util.List;
-
+/**
+ * 규모별 응답 시간 비교 — Full Scan vs GeoHash.
+ *
+ * 두 경로는 저장하는 값이 다르다. Full Scan 은 Hospital 레코드 전체를 담고 8만 건
+ * 전부에 haversine 을 돌리며, GeoHash 경로는 병원 코드만 담고 후보 페이지만 읽는다.
+ * 배수에는 색인 효과와 저장 대상 차이가 함께 들어 있다.
+ *
+ * Seek Count 비교 절이 있었으나 제거했다. pageId 간 거리를 재고 있었는데 그것은
+ * 인덱스가 만든 번호의 성질이라 파일 배치와 무관하다. 디스크 seek 을 재려면
+ * pageMap 이 배정한 파일 오프셋 간 거리를 봐야 한다.
+ */
 public class BenchmarkRunner {
 
     private static final int[] SIZES = {10000, 20000, 30000, 50000, 79081, 100000, 200000, 500000, 1000000};
 
-    private static final double SEARCH_LAT = 37.4979;
-    private static final double SEARCH_LNG = 127.0276;
-    private static final double RADIUS_KM  = 5.0;
-
     public static void main(String[] args) throws Exception {
 
-        // === 1. 응답 시간 벤치마크 ===
         System.out.println("=== GeoSpatial Index Engine Benchmark ===");
         System.out.println();
-        System.out.printf("%-10s %-15s %-15s %-15s%n", "건수", "Full Scan", "GeoHash", "Hilbert");
-        System.out.println("-".repeat(55));
+        System.out.printf("%-10s %-15s %-15s%n", "건수", "Full Scan", "GeoHash");
+        System.out.println("-".repeat(40));
 
         for (int size : SIZES) {
             long fullScan = FullScanBenchmark.run(size);
             long geoHash  = GeohashBenchmark.run(size);
-            long hilbert  = HilbertBenchmark.run(size);
 
-            System.out.printf("%-10d %-15s %-15s %-15s%n",
+            System.out.printf("%-10d %-15s %-15s%n",
                     size,
                     fullScan + "ms",
-                    geoHash  + "ms",
-                    hilbert  + "ms"
+                    geoHash  + "ms"
             );
         }
 
-        System.out.println("-".repeat(55));
+        System.out.println("-".repeat(40));
         System.out.println("완료");
-        System.out.println();
-
-        // === 2. Page Seek Count 비교 ===
-        System.out.println("=== Page Seek Count 비교 (강남 반경 5km) ===");
-        System.out.println();
-
-        GeoHashIndex geoHashIndex = new GeoHashIndex();
-        List<Integer> geoPageIds = geoHashIndex.getPageIds(SEARCH_LAT, SEARCH_LNG, RADIUS_KM);
-        Collections.sort(geoPageIds);
-        long geoSeek = SeekCountBenchmark.seekCount(geoPageIds);
-
-        HilbertIndex hilbertIndex = new HilbertIndex();
-        List<Integer> hilPageIds = hilbertIndex.getPageIds(SEARCH_LAT, SEARCH_LNG, RADIUS_KM);
-        Collections.sort(hilPageIds);
-        long hilSeek = SeekCountBenchmark.seekCount(hilPageIds);
-
-        System.out.printf("%-25s %-12s %-15s%n", "방식", "PageId 수", "Seek Count");
-        System.out.println("-".repeat(52));
-        System.out.printf("%-25s %-12d %-15d%n", "GeoHash",                geoPageIds.size(), geoSeek);
-        System.out.printf("%-25s %-12d %-15d%n", "Hilbert Multi-Interval", hilPageIds.size(), hilSeek);
-        System.out.println("-".repeat(52));
-        System.out.printf("Hilbert가 GeoHash 대비 Seek Count %.1fx 적음%n",
-                (double) geoSeek / Math.max(hilSeek, 1));
     }
 }

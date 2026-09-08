@@ -22,14 +22,13 @@ public class RecordManager {
 
     public void put(String key, byte[] value) {
         int pageId = Math.abs(key.hashCode() % MAX_PAGES);
-        Page page = cacheManager.getPage(pageId);
+        Page page = cacheManager.getOrCreatePage(pageId);
 
         if (!PageLayout.isInitialized(page)) {
             PageLayout.initializePage(page);
         }
 
         int slotId = writeWithOverflow(pageId, page, value);
-        cacheManager.putPage(page);
         index.put(key, new RecordId(pageId, slotId));
     }
 
@@ -42,7 +41,7 @@ public class RecordManager {
                 overflowPageId = allocateNewPage();
                 PageLayout.setOverflowPageId(page, overflowPageId);
             }
-            Page overflowPage = cacheManager.getPage(overflowPageId);
+            Page overflowPage = cacheManager.getOrCreatePage(overflowPageId);
             if (!PageLayout.isInitialized(overflowPage)) {
                 PageLayout.initializePage(overflowPage);
             }
@@ -56,7 +55,7 @@ public class RecordManager {
         RecordId rid = index.get(key);
         if (rid == null) return null;
 
-        Page page = cacheManager.getPage(rid.getPageId());
+        Page page = cacheManager.getOrCreatePage(rid.getPageId());
         return PageLayout.readRecord(page, rid.getSlotId());
     }
 
@@ -71,7 +70,7 @@ public class RecordManager {
 
     private int allocateNewPage() {
         for (int pageId = 0; pageId < MAX_PAGES; pageId++) {
-            Page page = cacheManager.getPage(pageId);
+            Page page = cacheManager.getOrCreatePage(pageId);
             if (!PageLayout.isInitialized(page)) return pageId;
         }
         throw new IllegalStateException("no available pages");

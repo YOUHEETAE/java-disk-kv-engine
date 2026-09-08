@@ -7,36 +7,39 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class GeohashTest {
 
+    /** GeoHashIndex.BITS_PER_AXIS 와 같은 값. 운영과 다른 해상도를 검증하지 않기 위해 맞춘다. */
+    private static final int BITS_PER_AXIS = 15;
+
     // -------------------------------------------------------------------------
     // toMorton
     // -------------------------------------------------------------------------
 
     @Test
     void toMorton_결정론적_같은좌표_같은값() {
-        long a = GeoHash.toMorton(37.4979, 127.0276, 6);
-        long b = GeoHash.toMorton(37.4979, 127.0276, 6);
+        long a = GeoHash.toMorton(37.4979, 127.0276, BITS_PER_AXIS);
+        long b = GeoHash.toMorton(37.4979, 127.0276, BITS_PER_AXIS);
         assertEquals(a, b);
     }
 
     @Test
     void toMorton_다른좌표_다른값() {
-        long gangnam = GeoHash.toMorton(37.4979, 127.0276, 6);
-        long busan   = GeoHash.toMorton(35.1796, 129.0756, 6);
+        long gangnam = GeoHash.toMorton(37.4979, 127.0276, BITS_PER_AXIS);
+        long busan   = GeoHash.toMorton(35.1796, 129.0756, BITS_PER_AXIS);
         assertNotEquals(gangnam, busan);
     }
 
     @Test
     void toMorton_공간지역성_가까운좌표가_더_가까운값() {
-        long gangnam = GeoHash.toMorton(37.4979, 127.0276, 6);
-        long nearby  = GeoHash.toMorton(37.4990, 127.0280, 6);
-        long busan   = GeoHash.toMorton(35.1796, 129.0756, 6);
+        long gangnam = GeoHash.toMorton(37.4979, 127.0276, BITS_PER_AXIS);
+        long nearby  = GeoHash.toMorton(37.4990, 127.0280, BITS_PER_AXIS);
+        long busan   = GeoHash.toMorton(35.1796, 129.0756, BITS_PER_AXIS);
 
         assertTrue(Math.abs(gangnam - nearby) < Math.abs(gangnam - busan));
     }
 
     @Test
     void toMorton_양수값_반환() {
-        long morton = GeoHash.toMorton(37.4979, 127.0276, 6);
+        long morton = GeoHash.toMorton(37.4979, 127.0276, BITS_PER_AXIS);
         assertTrue(morton > 0);
     }
 
@@ -46,18 +49,18 @@ public class GeohashTest {
 
     @Test
     void interleave_0_0은_0() {
-        assertEquals(0L, GeoHash.interleave(0, 0));
+        assertEquals(0L, GeoHash.interleave(0, 0, BITS_PER_AXIS));
     }
 
     @Test
     void interleave_lng1_lat0은_2() {
         // lngBit0=1, latBit0=0 → 마지막 두 비트: 10 → 2
-        assertEquals(2L, GeoHash.interleave(1, 0));
+        assertEquals(2L, GeoHash.interleave(1, 0, BITS_PER_AXIS));
     }
 
     @Test
     void interleave_lng0_lat1은_1() {
         // lngBit0=0, latBit0=1 → 마지막 두 비트: 01 → 1
-        assertEquals(1L, GeoHash.interleave(0, 1));
+        assertEquals(1L, GeoHash.interleave(0, 1, BITS_PER_AXIS));
     }
 }
