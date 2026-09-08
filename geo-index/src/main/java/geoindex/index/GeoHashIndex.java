@@ -1,9 +1,6 @@
 package geoindex.index;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 public class GeoHashIndex implements SpatialIndex {
 
@@ -14,6 +11,14 @@ public class GeoHashIndex implements SpatialIndex {
         return (int) GeoHash.toMorton(lat, lng, PRECISION);
     }
 
+    /**
+     * 반경을 덮는 격자를 열거해 pageId 목록을 만든다.
+     *
+     * Set 이 아닌 이유: interleave 가 전단사라 서로 다른 격자 쌍이 같은 값을 낼 수 없다.
+     * 중복 제거는 필요 없고, 필요한 건 정렬이다 — flush 가 파일을 pageId 순으로 배치하므로
+     * 조회도 오름차순으로 읽어야 그 배치와 OS readahead 를 활용한다.
+     * 격자 순회 순서는 Morton 인터리빙 때문에 오름차순이 아니라 정렬이 따로 필요하다.
+     */
     @Override
     public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
         double deltaDegreeY = radiusKm / 110.0;
@@ -31,14 +36,15 @@ public class GeoHashIndex implements SpatialIndex {
         long minLngBits = Math.max(0, lngToBits(minLng, PRECISION) - 1);
         long maxLngBits = Math.min((1L << 15) - 1, lngToBits(maxLng, PRECISION) + 1);
 
-        Set<Integer> pageSet = new HashSet<>();
+        List<Integer> pageIds = new ArrayList<>();
         for (long latBits = minLatBits; latBits <= maxLatBits; latBits++) {
             for (long lngBits = minLngBits; lngBits <= maxLngBits; lngBits++) {
                 long morton = GeoHash.interleave(lngBits, latBits);
-                pageSet.add((int) morton);
+                pageIds.add((int) morton);
             }
         }
-        return new ArrayList<>(pageSet);
+        Collections.sort(pageIds);
+        return pageIds;
     }
 
     // 위도 → 비트 (0 ~ 2^15 - 1)
