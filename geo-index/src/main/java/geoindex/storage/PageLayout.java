@@ -131,8 +131,16 @@ public class PageLayout {
         return page.buffer().getInt(OFFSET_OVERFLOW);
     }
 
+    /**
+     * 여기서만 markDirty 를 부르는 이유: 나머지 세터는 private 이라 writeRecord ·
+     * initializePage 안에서만 불리고 그 끝에서 함께 표시된다. 이 세터만 public 이라
+     * SpatialRecordManager 가 단독으로 부르므로, 스스로 표시하지 않으면
+     * 이 호출이 유일한 변경인 페이지(꽉 차서 writeRecord 가 -1 을 낸 경우)가
+     * flush 를 건너뛴다.
+     */
     public static void setOverflowPageId(Page page, int pageId) {
         page.buffer().putInt(OFFSET_OVERFLOW, pageId);
+        page.markDirty();
     }
 
     public static int getRecordCount(Page page) {
