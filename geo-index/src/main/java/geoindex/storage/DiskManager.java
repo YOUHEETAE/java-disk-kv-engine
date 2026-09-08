@@ -80,17 +80,22 @@ public class DiskManager {
     }
 
     /**
-     * pageId 로 페이지를 읽는다. 파일에 없는 pageId 면 빈 Page 를 돌려준다(디스크 접근 없음).
+     * pageId 로 페이지를 읽는다. 파일에 없으면 null — 없는 것을 만들어내지 않는다.
+     *
+     * 없을 때 페이지가 필요한지는 파일과 무관한 정책이라 버퍼 계층이 정한다.
+     * CacheManager 의 findPage(없으면 null) / getOrCreatePage(없으면 생성) 가 그 두 갈래다.
+     * 여기서 빈 Page 를 돌려주면 두 갈래가 하나로 합쳐져, 읽기가 쓰기의 부작용을 물려받는다.
+     *
+     * 집계를 null 검사 뒤에 두는 이유: pageReadCount 가 실제 디스크 접근만 세도록.
      *
      * synchronized 인 이유: RandomAccessFile 은 내부 파일 포인터를 공유한다.
      * seek 과 readFully 사이에 다른 스레드가 seek 하면 그 위치를 읽어버린다.
      * 두 호출이 한 덩어리로 묶여야 한다.
      */
     public synchronized Page readPage(int pageId) {
-        engineMetrics.incrementPageReadCount();
         Long offset = pageMap.get(pageId);
-        if (offset == null) return new Page(pageId);
-
+        if (offset == null) return null;
+        engineMetrics.incrementPageReadCount();
         try {
             dbFile.seek(offset);
             Page page = new Page(pageId);

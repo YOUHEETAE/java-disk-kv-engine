@@ -50,7 +50,7 @@ public class SpatialRecordManager {
 
     public void put(double lat, double lng, byte[] value) {
         int pageId = spatialIndex.toPageId(lat, lng);
-        Page page = cacheManager.getPage(pageId);
+        Page page = cacheManager.getOrCreatePage(pageId);
         writeWithOverflow(page, value);
     }
 
@@ -79,7 +79,7 @@ public class SpatialRecordManager {
                     PageLayout.setOverflowPageId(current, overflowPageId);
                 }
                 cacheManager.putPage(current);
-                current = cacheManager.getPage(overflowPageId);
+                current = cacheManager.getOrCreatePage(overflowPageId);
             }
         } finally {
             writeLock.unlock();
@@ -112,10 +112,11 @@ public class SpatialRecordManager {
         List<byte[]> results = new ArrayList<>();
 
         for (int pageId : pageIds) {
+            Page page = cacheManager.findPage(pageId);
+            if(page == null) continue;
             ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
             readLock.lock();
             try {
-                Page page = cacheManager.getPage(pageId);
                 if (!PageLayout.isInitialized(page)) continue;
 
                 results.addAll(PageLayout.readAllRecords(page));
@@ -124,7 +125,8 @@ public class SpatialRecordManager {
                 while (overflowPageId != PageLayout.NO_OVERFLOW) {
                     // overflow 페이지는 별도 락 없이 읽음
                     // primaryPage 락이 전체 체인을 보호
-                    Page overflowPage = cacheManager.getPage(overflowPageId);
+                    Page overflowPage = cacheManager.findPage(overflowPageId);
+                    if(overflowPage == null) break;
                     if (!PageLayout.isInitialized(overflowPage)) break;
                     results.addAll(PageLayout.readAllRecords(overflowPage));
                     overflowPageId = PageLayout.getOverflowPageId(overflowPage);
@@ -148,12 +150,18 @@ public class SpatialRecordManager {
     // overflow 체인 순회 (내부 공통 로직)
     // -------------------------------------------------------------------------
 
+    /**
+     * 존재 확인이 getLock 보다 앞에 온다. 순서를 바꾸면 없는 칸마다 락 객체가 남고,
+     * 그 맵을 비우는 곳도 rebuild 뿐이다. 디스크 읽기까지 락 밖에서 끝나 락 구간도 짧아진다.
+     */
     private List<String> readAllCodesFromChain(int pageId) {
+
+        Page page = cacheManager.findPage(pageId);
+        if(page == null) return Collections.emptyList();
         // primaryPage 락 하나로 전체 체인 보호
         ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
         readLock.lock();
         try {
-            Page page = cacheManager.getPage(pageId);
             if (!PageLayout.isInitialized(page)) return Collections.emptyList();
 
             List<String> codes = new ArrayList<>();
@@ -163,7 +171,8 @@ public class SpatialRecordManager {
             while (overflowPageId != PageLayout.NO_OVERFLOW) {
                 // overflow 페이지는 별도 락 없이 읽음
                 // primaryPage 락이 전체 체인을 보호
-                Page overflowPage = cacheManager.getPage(overflowPageId);
+                Page overflowPage = cacheManager.findPage(overflowPageId);
+                if(overflowPage == null) break;
                 if (!PageLayout.isInitialized(overflowPage)) break;
                 collectCodes(overflowPage, codes);
                 overflowPageId = PageLayout.getOverflowPageId(overflowPage);

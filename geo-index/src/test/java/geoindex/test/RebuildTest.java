@@ -43,8 +43,7 @@ class RebuildTest {
         dm.rebuild(tempDm -> {});
 
         geoindex.storage.Page after = dm.readPage(1);
-        assertFalse(geoindex.storage.PageLayout.isInitialized(after),
-                "rebuild 후 기존 페이지는 없어야 한다");
+        assertNull(after, "rebuild 후 기존 페이지는 없어야 한다");
 
         dm.close();
         System.out.println("DiskManager rebuild 후 기존 데이터 사라짐 ✅");
@@ -83,13 +82,13 @@ class RebuildTest {
         DiskManager dm = new DiskManager(TEST_FILE, metrics);
         CacheManager cm = new CacheManager(dm, metrics);
 
-        geoindex.storage.Page page = cm.getPage(5);
+        geoindex.storage.Page page = cm.getOrCreatePage(5);
         page.getData()[0] = 42;
         cm.putPage(page);
 
         cm.rebuild(tempCm -> {});
 
-        geoindex.storage.Page after = cm.getPage(5);
+        geoindex.storage.Page after = cm.getOrCreatePage(5);
         assertNotSame(page, after, "rebuild 후 버퍼가 비워져 새 인스턴스여야 한다");
         assertEquals(0, after.getData()[0], "rebuild 후 기존 데이터가 없어야 한다");
 

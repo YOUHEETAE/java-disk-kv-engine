@@ -18,8 +18,31 @@ public class CacheManager {
 
 
 
-    public Page getPage(int pageId) {
+    /**
+     * 캐시 → 파일 순으로 찾는다. 어느 쪽에도 없으면 null — 읽기 경로 전용.
+     *
+     * 검색이 훑는 pageId 는 저장된 데이터가 아니라 반경을 덮는 격자에서 나온다.
+     * 그래서 조회 한 번에 "아무도 쓴 적 없는 칸"이 대량으로 섞인다(실측 79%).
+     * 그 칸마다 빈 Page 를 만들면 4KB 씩 캐시에 눌러앉고, 회수는 rebuild 밖에 없다.
+     *
+     * computeIfAbsent 는 매핑 함수가 null 을 반환하면 저장하지 않고 null 을 돌려준다.
+     * "없으면 캐시에 넣지 않는다"가 별도 분기 없이 성립하는 이유다.
+     */
+    public Page findPage(int pageId) {
         return cache.computeIfAbsent(pageId, diskManager::readPage);
+    }
+
+    /**
+     * 캐시 → 파일 순으로 찾고, 그래도 없으면 새로 만든다 — 쓰기 경로 전용.
+     * 현재 운영 호출자는 rebuild 안의 put 하나뿐이다. 읽기는 findPage 를 쓴다.
+     *
+     * 앞의 두 단계를 건너뛰고 항상 새로 만들면 안 된다. 이미 레코드가 든 페이지를 덮으면
+     * initializePage 가 recordCount 를 0 으로 되돌리고 flush 가 그대로 파일에 써서,
+     * 기존 레코드가 예외 없이 사라진다.
+     */
+    public Page getOrCreatePage(int pageId){
+        return cache.computeIfAbsent(pageId, id -> {Page page = diskManager.readPage(id);
+            return page != null ? page : new Page(id);});
     }
 
 

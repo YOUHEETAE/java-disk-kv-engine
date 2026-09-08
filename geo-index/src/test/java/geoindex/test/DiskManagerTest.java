@@ -85,12 +85,11 @@ class DiskManagerTest {
     }
 
     @Test
-    void testReadNonExistentPageReturnsEmpty() {
+    void testReadNonExistentPageReturnsNull() {
         DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
             Page page = dm.readPage(999_999_999);
-            assertNotNull(page);
-            assertFalse(PageLayout.isInitialized(page));
+            assertNull(page);
         } finally {
             dm.close();
         }
