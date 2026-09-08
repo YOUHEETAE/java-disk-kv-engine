@@ -40,6 +40,19 @@ public class GeoHashIndex implements SpatialIndex {
         double maxLng = lng + deltaDegreeX;
 
         // 위도/경도를 직접 비트로 변환 (deinterleave 사용 안 함)
+        //
+        // 사방으로 한 칸씩 넓히는 이유: latToBits 가 (long) 캐스팅으로 내림하므로,
+        // MBR 경계가 칸 경계에 걸치면 그 칸이 범위에서 빠진다. 그러면 반경 안의
+        // 데이터가 조용히 누락된다 — 예외도 로그도 없이 결과만 줄어든다.
+        //
+        // 대가는 후보 증폭이고, 반경이 작을수록 크다.
+        //   반경 1km : 3×4 = 12칸  → 5×6 = 30칸  (2.5배)
+        //   반경 5km : 13×15       → 15×17       (1.3배)
+        // 늘어난 칸은 대부분 데이터가 없어 findPage 가 null 을 돌려주므로 할당은 없다.
+        // 조회 횟수만 늘어난다.
+        //
+        // 줄이려면 경계가 칸 경계에 실제로 가까울 때만 확장하면 된다. 다만 잘못 줄이면
+        // 위의 조용한 누락이 되살아나므로, 경계 케이스 테스트를 먼저 갖춘 뒤에 손댄다.
         long minLatBits = Math.max(0, latToBits(minLat) - 1);
         long maxLatBits = Math.min(MAX_GRID_INDEX, latToBits(maxLat) + 1);
         long minLngBits = Math.max(0, lngToBits(minLng) - 1);
