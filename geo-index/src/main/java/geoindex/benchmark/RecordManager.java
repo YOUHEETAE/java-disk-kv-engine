@@ -1,4 +1,4 @@
-package geoindex.api;
+package geoindex.benchmark;
 
 import geoindex.buffer.CacheManager;
 import geoindex.storage.Page;
@@ -9,6 +9,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Phase 0 의 키-값 저장소. FullScanBenchmark 의 비교 기준선이다.
+ *
+ * 공간 인덱스로 넘어간 뒤에도 남겨둔 이유: "색인 없는 KV 저장소 vs 공간 색인" 을
+ * 재는 것이 벤치마크의 목적이라, 이것을 지우면 비교 대상이 없어진다.
+ *
+ * 엔진의 공개 API 가 아니다. 락이 하나도 없어 스레드 안전하지 않고,
+ * put 에 레코드 크기 검사도 없다 — 벤치마크가 단일 스레드로 고정 크기
+ * Hospital 레코드만 넣기 때문에 성립한다.
+ */
 public class RecordManager {
 
     private static final int MAX_PAGES = 100000;

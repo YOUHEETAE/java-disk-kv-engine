@@ -1,6 +1,6 @@
 package geoindex.test;
 
-import geoindex.api.RecordId;
+import geoindex.benchmark.RecordId;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 

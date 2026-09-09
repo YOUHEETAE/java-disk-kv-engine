@@ -640,8 +640,6 @@ geo-index/
     SpatialCacheEngine.java          최상단 API — JVM 캐시 (getOrMiss / put / clearCache)
     SpatialRecordManager.java        파일 검색 / 저장 / rebuild
     PageResult.java                  캐시 조회 결과 값 객체
-    RecordId.java                    레코드 물리 위치 값 객체 (pageId + slotId)
-    RecordManager.java               Key-Value 저장
   cache/
     PageCacheStore.java         LinkedHashMap LRU 기반 캐시 인프라
     CachePolicy.java            TTL / maxSize 정책

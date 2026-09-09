@@ -266,33 +266,6 @@ result.getCodes()    // MISS 시 hospital_code 목록
 
 ---
 
-### RecordManager.java
-
-Key-Value 기반 저장소입니다. O(1) 직접 접근을 위한 인메모리 인덱스를 사용합니다.
-
-```java
-void put(String key, byte[] value)
-byte[] get(String key)
-List<byte[]> getAllValues()
-```
-
----
-
-### RecordId.java
-
-레코드의 물리적 위치를 나타내는 값 객체입니다.
-
-```java
-class RecordId {
-    int pageId;
-    int slotId;  // O(1) 직접 접근
-}
-```
-
-`equals` / `hashCode` 구현 → HashMap 키로 사용 가능 → O(n) 슬롯 스캔에서 O(1) 직접 접근으로 개선
-
----
-
 ## 핵심 설계: 두 티어 페이지 관리
 
 ```
