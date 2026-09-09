@@ -272,4 +272,50 @@ class SpatialRecordManagerTest {
                 () -> manager.getAllCodesByPageId(pageId));
         assertEquals(pageId, e.getPageId());
     }
+
+    // -------------------------------------------------------------------------
+    // 레코드 크기 계약
+    // -------------------------------------------------------------------------
+
+    /**
+     * 한 페이지에 담을 수 없는 값은 진입점에서 막는다.
+     *
+     * 막지 않으면 writeRecord 가 빈 페이지에서도 계속 -1 을 반환하고,
+     * writeWithOverflow 가 overflow 를 하나씩 달며 무한히 돈다. 풀(40,960장)을
+     * 다 태운 뒤에야 죽고, free list 에 반납 경로가 없어 rebuild 전까지 회복되지 않는다.
+     * put 한 번이 엔진 전체를 못 쓰게 만드는 셈이다.
+     */
+    @Test
+    void 페이지에_담을_수_없는_크기는_거부한다() {
+        byte[] tooLarge = new byte[PageLayout.MAX_RECORD_SIZE + 1];
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> manager.put(37.4979, 127.0276, tooLarge));
+        assertTrue(e.getMessage().contains("record too large"), e.getMessage());
+    }
+
+    /** 막는 것과 별개로, overflow 풀이 손상되지 않았는지 본다 — 이 검사의 실제 목적이다. */
+    @Test
+    void 크기_초과가_overflow_풀을_소진하지_않는다() {
+        byte[] tooLarge = new byte[PageLayout.MAX_RECORD_SIZE + 1];
+
+        assertThrows(IllegalArgumentException.class,
+                () -> manager.put(37.4979, 127.0276, tooLarge));
+
+        assertEquals(0, manager.getUsedOverflowPageCount(),
+                "거부된 put 은 overflow 를 한 장도 쓰지 않아야 한다");
+    }
+
+    /** 경계값은 통과해야 한다. MAX_RECORD_SIZE 는 빈 페이지에 딱 들어가는 크기다. */
+    @Test
+    void 최대_크기는_허용한다() {
+        double lat = 37.4979, lng = 127.0276;
+        byte[] exact = new byte[PageLayout.MAX_RECORD_SIZE];
+
+        manager.put(lat, lng, exact);
+
+        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        assertEquals(1, manager.getAllCodesByPageId(pageId).size());
+        assertEquals(0, manager.getUsedOverflowPageCount(), "한 페이지에 들어가야 한다");
+    }
 }

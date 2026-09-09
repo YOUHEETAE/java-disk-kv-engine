@@ -65,6 +65,10 @@ public class SpatialRecordManager {
     // -------------------------------------------------------------------------
 
     public void put(double lat, double lng, byte[] value) {
+        if (value.length > PageLayout.MAX_RECORD_SIZE) {
+            throw new IllegalArgumentException(
+                    "record too large: " + value.length + " > " + PageLayout.MAX_RECORD_SIZE);
+        }
         int pageId = spatialIndex.toPageId(lat, lng);
         writeWithOverflow(pageId, value);
     }
