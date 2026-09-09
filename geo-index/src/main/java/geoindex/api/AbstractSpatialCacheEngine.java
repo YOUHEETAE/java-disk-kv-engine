@@ -2,6 +2,7 @@ package geoindex.api;
 
 import geoindex.metric.MetricsSnapshot;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -35,7 +36,8 @@ public abstract class AbstractSpatialCacheEngine<T> {
 
     public void rebuild(Consumer<IndexLoader> supplier) {
         spatialCacheEngine.rebuild(srm ->
-            supplier.accept((lat, lng, code) -> srm.put(lat, lng, code.getBytes()))
+            supplier.accept((lat, lng, code) ->
+                    srm.put(lat, lng, code.getBytes(StandardCharsets.UTF_8)))
         );
         warmup();
     }

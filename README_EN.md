@@ -636,8 +636,6 @@ geo-index/
     SpatialCacheEngine.java          Top-level API — JVM cache (getOrMiss / put / clearCache)
     SpatialRecordManager.java        File search / store / rebuild
     PageResult.java                  Cache lookup result value object
-    RecordId.java                    Physical record location value object (pageId + slotId)
-    RecordManager.java               Key-Value storage
   cache/
     PageCacheStore.java         LinkedHashMap LRU-based cache infrastructure
     CachePolicy.java            TTL / maxSize policy

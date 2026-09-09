@@ -1,6 +1,7 @@
 package geoindex.benchmark;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 public class Hospital {
     public final String hospitalCode;
@@ -32,13 +33,13 @@ public class Hospital {
 
 
     public static byte[] toBytes(Hospital h) {
-        byte[] doctorBytes    = h.doctorNum.getBytes();
-        byte[] addressBytes   = h.hospitalAddress.getBytes();
-        byte[] nameBytes      = h.hospitalName.getBytes();
-        byte[] telBytes       = h.hospitalTel.getBytes();
-        byte[] districtBytes  = h.districtName.getBytes();
-        byte[] homepageBytes  = h.hospitalHomepage.getBytes();
-        byte[] provinceBytes  = h.provinceName.getBytes();
+        byte[] doctorBytes    = h.doctorNum.getBytes(StandardCharsets.UTF_8);
+        byte[] addressBytes   = h.hospitalAddress.getBytes(StandardCharsets.UTF_8);
+        byte[] nameBytes      = h.hospitalName.getBytes(StandardCharsets.UTF_8);
+        byte[] telBytes       = h.hospitalTel.getBytes(StandardCharsets.UTF_8);
+        byte[] districtBytes  = h.districtName.getBytes(StandardCharsets.UTF_8);
+        byte[] homepageBytes  = h.hospitalHomepage.getBytes(StandardCharsets.UTF_8);
+        byte[] provinceBytes  = h.provinceName.getBytes(StandardCharsets.UTF_8);
 
         int size = 8 + 8  // coordinateX, Y
                 + 4 + doctorBytes.length
@@ -88,6 +89,6 @@ public class Hospital {
         int length = buf.getInt();
         byte[] bytes = new byte[length];
         buf.get(bytes);
-        return new String(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 }

@@ -1,6 +1,5 @@
 package geoindex.benchmark;
 
-import geoindex.api.RecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;

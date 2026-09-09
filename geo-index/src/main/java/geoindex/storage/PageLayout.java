@@ -32,6 +32,9 @@ public class PageLayout {
     public static final int HEADER_SIZE         = 16;
     public static final int SLOT_SIZE           = 8;    // offset(4) + length(4)
 
+    /** 한 페이지에 담을 수 있는 최대 value 크기. 4096 - 헤더 16 - 슬롯 8 - 길이 4 */
+    public static final int MAX_RECORD_SIZE = Page.PAGE_SIZE - HEADER_SIZE - SLOT_SIZE - 4;
+
     /** overflowPageId 가 이 값이면 체인의 끝이다. */
     public static final int NO_OVERFLOW         = -1;
 

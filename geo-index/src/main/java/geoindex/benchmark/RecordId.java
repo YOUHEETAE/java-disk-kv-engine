@@ -1,4 +1,4 @@
-package geoindex.api;
+package geoindex.benchmark;
 
 public class RecordId {
     private final int pageId;

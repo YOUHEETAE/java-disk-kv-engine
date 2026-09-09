@@ -178,6 +178,8 @@ benchmark/
   FullScanBenchmark.java         Full Scan 측정
   GeohashBenchmark.java          GeoHash 측정
   BenchmarkRunner.java           규모별 비교 실행
+  RecordManager.java             Phase 0 KV 저장소 — Full Scan 의 비교 기준선
+  RecordId.java                  레코드 물리 위치 값 객체 (pageId + slotId)
 
 spring-app/
   HospitalSearchBenchmark.java   실제 병원 데이터 3종 벤치마크

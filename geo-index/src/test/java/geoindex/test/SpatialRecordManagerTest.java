@@ -2,6 +2,7 @@ package geoindex.test;
 
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
+import geoindex.exception.CorruptedIndexException;
 import geoindex.index.GeoHashIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
@@ -178,5 +179,143 @@ class SpatialRecordManagerTest {
 
         assertTrue(allCodes.contains("B0001"));
         assertFalse(allCodes.contains("B9999"));
+    }
+
+    // -------------------------------------------------------------------------
+    // 체인 손상 — PageLayout.setOverflowPageId 로 링크를 인위적으로 망가뜨린다
+    // -------------------------------------------------------------------------
+
+    /**
+     * 체인이 파일에도 캐시에도 없는 페이지를 가리키면 던진다.
+     *
+     * 예전에는 break 로 넘어가 결과만 조용히 줄었다. 손상 범위는 4KB 인데
+     * 사용자에게는 "그 지역에 병원이 없다" 로 보이므로 아무도 알아채지 못한다.
+     */
+    @Test
+    void 체인이_없는_페이지를_가리키면_예외() {
+        double lat = 37.4979, lng = 127.0276;
+        manager.put(lat, lng, "B0001".getBytes());
+        cacheManager.flush();
+
+        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        Page page = cacheManager.getOrCreatePage(pageId);
+        PageLayout.setOverflowPageId(page, 999_999_999);   // 아무도 쓴 적 없는 pageId
+        cacheManager.flush();
+        cacheManager.clearCache();                          // findPage 가 null 을 돌려주게
+
+        CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
+                () -> manager.getAllCodesByPageId(pageId));
+        assertEquals(pageId, e.getPageId(), "손상된 체인의 primary 를 담아야 한다");
+    }
+
+    /**
+     * 체인이 가리키는 페이지가 초기화돼 있지 않으면 던진다.
+     *
+     * getOrCreatePage 는 초기화하지 않은 빈 Page 를 캐시에 넣으므로,
+     * 그것을 링크 대상으로 삼으면 savePage 가 중단된 상태를 그대로 재현할 수 있다.
+     */
+    @Test
+    void 체인_페이지가_초기화되지_않았으면_예외() {
+        double lat = 37.4979, lng = 127.0276;
+        manager.put(lat, lng, "B0001".getBytes());
+
+        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        int emptyPageId = pageId + 1;
+        cacheManager.getOrCreatePage(emptyPageId);          // 초기화되지 않은 채 캐시에만 존재
+
+        Page page = cacheManager.getOrCreatePage(pageId);
+        PageLayout.setOverflowPageId(page, emptyPageId);
+
+        CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
+                () -> manager.getAllCodesByPageId(pageId));
+        assertEquals(pageId, e.getPageId());
+    }
+
+    /**
+     * 체인에 사이클이 있으면 던진다.
+     *
+     * 홉 상한이 없으면 while 이 영원히 끝나지 않는다. 결과가 틀리는 다른 손상과 달리
+     * 요청 스레드가 묶여, 같은 칸으로 요청이 반복되면 스레드 풀이 고갈된다.
+     *
+     * 레코드를 1건만 두는 이유: 상한(OVERFLOW_PAGES)까지 도는 동안 페이지의 레코드가
+     * 매 바퀴 누적된다. 페이지가 꽉 차 있으면 수백만 건이 쌓인다.
+     */
+    @Test
+    void 체인에_사이클이_있으면_예외() {
+        double lat = 37.4979, lng = 127.0276;
+        manager.put(lat, lng, "B0001".getBytes());
+
+        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        Page page = cacheManager.getOrCreatePage(pageId);
+        PageLayout.setOverflowPageId(page, pageId);         // 자기 자신을 가리킨다
+
+        CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
+                () -> manager.getAllCodesByPageId(pageId));
+        assertTrue(e.getMessage().contains("hops"), "사이클 메시지여야 한다: " + e.getMessage());
+    }
+
+    /**
+     * primary 가 초기화돼 있지 않으면 던진다.
+     *
+     * put 이 페이지 획득까지 쓰기 락 안에서 하므로, 정상 경로로는 초기화 전 페이지가
+     * 독자에게 보이지 않는다. 그래서 이 조건은 손상만 뜻한다 — 체인 쪽 두 조건과 같다.
+     *
+     * 이 테스트는 getOrCreatePage 를 직접 불러 그 상태를 만든다. put 을 거치지 않으므로
+     * 락 밖에서 만들어지고, 운영에서는 재현되지 않는 상태다.
+     */
+    @Test
+    void primary가_초기화되지_않았으면_예외() {
+        int pageId = new GeoHashIndex().toPageId(37.4979, 127.0276);
+        cacheManager.getOrCreatePage(pageId);               // 초기화 전 상태
+
+        CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
+                () -> manager.getAllCodesByPageId(pageId));
+        assertEquals(pageId, e.getPageId());
+    }
+
+    // -------------------------------------------------------------------------
+    // 레코드 크기 계약
+    // -------------------------------------------------------------------------
+
+    /**
+     * 한 페이지에 담을 수 없는 값은 진입점에서 막는다.
+     *
+     * 막지 않으면 writeRecord 가 빈 페이지에서도 계속 -1 을 반환하고,
+     * writeWithOverflow 가 overflow 를 하나씩 달며 무한히 돈다. 풀(40,960장)을
+     * 다 태운 뒤에야 죽고, free list 에 반납 경로가 없어 rebuild 전까지 회복되지 않는다.
+     * put 한 번이 엔진 전체를 못 쓰게 만드는 셈이다.
+     */
+    @Test
+    void 페이지에_담을_수_없는_크기는_거부한다() {
+        byte[] tooLarge = new byte[PageLayout.MAX_RECORD_SIZE + 1];
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> manager.put(37.4979, 127.0276, tooLarge));
+        assertTrue(e.getMessage().contains("record too large"), e.getMessage());
+    }
+
+    /** 막는 것과 별개로, overflow 풀이 손상되지 않았는지 본다 — 이 검사의 실제 목적이다. */
+    @Test
+    void 크기_초과가_overflow_풀을_소진하지_않는다() {
+        byte[] tooLarge = new byte[PageLayout.MAX_RECORD_SIZE + 1];
+
+        assertThrows(IllegalArgumentException.class,
+                () -> manager.put(37.4979, 127.0276, tooLarge));
+
+        assertEquals(0, manager.getUsedOverflowPageCount(),
+                "거부된 put 은 overflow 를 한 장도 쓰지 않아야 한다");
+    }
+
+    /** 경계값은 통과해야 한다. MAX_RECORD_SIZE 는 빈 페이지에 딱 들어가는 크기다. */
+    @Test
+    void 최대_크기는_허용한다() {
+        double lat = 37.4979, lng = 127.0276;
+        byte[] exact = new byte[PageLayout.MAX_RECORD_SIZE];
+
+        manager.put(lat, lng, exact);
+
+        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        assertEquals(1, manager.getAllCodesByPageId(pageId).size());
+        assertEquals(0, manager.getUsedOverflowPageCount(), "한 페이지에 들어가야 한다");
     }
 }
