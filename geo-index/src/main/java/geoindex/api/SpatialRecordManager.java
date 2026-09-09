@@ -7,6 +7,7 @@ import geoindex.metric.EngineMetrics;
 import geoindex.storage.Page;
 import geoindex.storage.PageLayout;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -170,7 +171,7 @@ public class SpatialRecordManager {
         List<byte[]> records = readAllRecordsFromChain(pageId);
         List<String> codes = new ArrayList<>(records.size());
         for (byte[] record : records) {
-            codes.add(new String(record));
+            codes.add(new String(record, StandardCharsets.UTF_8));
         }
         return codes;
     }
