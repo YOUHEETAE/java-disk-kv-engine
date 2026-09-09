@@ -251,7 +251,7 @@ Batch Load + pendingLoads:
 > Conditions: post JVM warm-up, same query 1,000 times, cache cleared before each run
 
 <div align=center>
-<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/main/docs/benchmark_chart.png" width="700"/>
 </div>
 
 - **Full Scan**: Linear growth O(N) with data size
@@ -267,7 +267,7 @@ Batch Load + pendingLoads:
 > Conditions: 5 warm-up runs excluded / alternating execution to eliminate cache bias / 3 scenarios × 100 runs
 
 <div align=center>
-<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/production_benchmark_chart.png" width="700"/>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/main/docs/production_benchmark_chart.png" width="700"/>
 </div>
 
 **Why GeoIndex alone is similar to Full Scan:**

@@ -218,7 +218,7 @@ rebuild(loader ->
 > 측정 조건: JVM Warm-up 후 동일 쿼리 1,000회 평균 / 각 실행 전 캐시 초기화
 
 <div align=center>
-<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/benchmark_chart.png" width="700"/>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/main/docs/benchmark_chart.png" width="700"/>
 </div>
 
 - **Full Scan**: 데이터량에 따라 선형 증가 O(N)
@@ -233,7 +233,7 @@ rebuild(loader ->
 > 측정 조건: Warm-up 5회 제외 / 홀짝 교대 실행으로 캐시 편향 제거 / 3종 시나리오 100회
 
 <div align=center>
-<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/dev/docs/production_benchmark_chart.png" width="700"/>
+<img src="https://raw.githubusercontent.com/YOUHEETAE/java-disk-kv-engine/main/docs/production_benchmark_chart.png" width="700"/>
 </div>
 
 **GeoIndex 단독이 Full Scan과 유사한 이유:**

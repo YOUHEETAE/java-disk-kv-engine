@@ -14,23 +14,26 @@ Include steps to reproduce, expected behavior, and actual behavior if applicable
 ### Submitting a Pull Request
 
 1. Fork this repository
-2. Create a branch from `dev`
+2. Create a branch from `main`
 3. Make your changes
-4. Open a PR targeting the `dev` branch
+4. Open a PR targeting the `main` branch
 
 ---
 
 ## Branch Strategy
 
+Trunk-based. `main` is the only long-lived branch and always holds the latest
+working state — every merge lands with the full test suite passing.
+
 | Branch | Purpose |
 |--------|---------|
-| `main` | Stable releases |
-| `dev` | Integration branch — base for all PRs |
+| `main` | The trunk — base for all PRs |
 | `feat/xxx` | New features |
 | `fix/xxx` | Bug fixes |
+| `refactor/xxx` | Refactoring |
 | `docs/xxx` | Documentation updates |
 
-> Please branch off from `dev` and open your PR against `dev`.
+> Branch off from `main` and open your PR against `main`.
 
 ---
 
@@ -48,12 +51,14 @@ Include steps to reproduce, expected behavior, and actual behavior if applicable
 
 **Requirements:** Java 21, Maven
 
+The Maven module lives in `geo-index/`, not at the repository root.
+
 ```bash
 # Build
-mvn clean compile
+mvn -f geo-index/pom.xml clean compile
 
 # Run tests
-mvn test
+mvn -f geo-index/pom.xml test
 ```
 
 ---
