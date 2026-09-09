@@ -53,17 +53,16 @@ public class SpatialRecordManager {
         cacheManager.close();
     }
 
-    // -------------------------------------------------------------------------
-    // 락 관리
-    // -------------------------------------------------------------------------
-
+    /**
+     * pageId 별 락. 쓰기와 읽기가 공유하는 유일한 지점이다.
+     *
+     * 키가 primary pageId 라 락 하나가 체인 전체를 덮는다. 그래서 조회한 칸마다
+     * 락 객체가 하나씩 생기고, 이 맵을 비우는 곳은 rebuild 뿐이다 —
+     * 읽기 경로가 존재 확인을 이 호출보다 먼저 하는 이유다.
+     */
     private ReentrantReadWriteLock getLock(int pageId) {
         return pageLocks.computeIfAbsent(pageId, k -> new ReentrantReadWriteLock());
     }
-
-    // -------------------------------------------------------------------------
-    // put()
-    // -------------------------------------------------------------------------
 
     public void put(double lat, double lng, byte[] value) {
         if (value.length > PageLayout.MAX_RECORD_SIZE) {
@@ -117,9 +116,34 @@ public class SpatialRecordManager {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // 파일 기반 검색
-    // -------------------------------------------------------------------------
+    /**
+     * overflow 페이지 번호를 하나 꺼낸다. 반납하는 곳은 없다.
+     *
+     * 그래서 소진되면 rebuild 전까지 회복되지 않는다. put 이 레코드 크기를 먼저
+     * 검사하는 이유이기도 하다 — 한 페이지에 담을 수 없는 값은 이 풀을 다 태운다.
+     */
+    private int allocateOverflowPage() {
+        Integer pageId = overflowFreeList.poll();
+        if (pageId == null) {
+            throw new IllegalStateException("overflow page pool exhausted");
+        }
+        return pageId;
+    }
+
+    /**
+     * overflow 번호 공간을 PRIMARY_PAGES 부터 시작한다.
+     *
+     * primary 는 Morton 코드라 0 ~ 2^30 을 쓰므로 이 구간과 겹친다. 한국 좌표는
+     * 상위 비트가 커서 부딪히지 않을 뿐, 번호 공간이 분리돼 있지는 않다.
+     * 근본 해결은 번호를 (primary, 체인 순번)에서 계산하는 것이고 그러면 이 목록도 사라진다.
+     */
+    private static ConcurrentLinkedDeque<Integer> buildFreeList() {
+        ConcurrentLinkedDeque<Integer> freeList = new ConcurrentLinkedDeque<>();
+        for (int i = PRIMARY_PAGES; i < TOTAL_PAGES; i++) {
+            freeList.push(i);
+        }
+        return freeList;
+    }
 
     /** 운영 진입점. SpatialCacheEngine 이 부르는 것은 이 하나뿐이다. */
     public Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
@@ -161,10 +185,6 @@ public class SpatialRecordManager {
                 .values().forEach(codes::addAll);
         return codes;
     }
-
-    // -------------------------------------------------------------------------
-    // overflow 체인 순회 (내부 공통 로직)
-    // -------------------------------------------------------------------------
 
     /** 체인의 레코드를 병원 코드 문자열로 바꾼다. 순회는 readAllRecordsFromChain 이 한다. */
     private List<String> readAllCodesFromChain(int pageId) {
@@ -224,10 +244,15 @@ public class SpatialRecordManager {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // rebuild
-    // -------------------------------------------------------------------------
-
+    /**
+     * 인덱스를 통째로 다시 만든다. 파일 교체는 아래 계층이 하고, 여기서는 자기 상태를 되돌린다.
+     *
+     * 임시 SpatialRecordManager 를 따로 세워 로더에 넘긴다. 적재가 임시 파일 쪽으로만
+     * 가야 하고, 그 사이 기존 인덱스는 계속 조회에 응답해야 하기 때문이다.
+     *
+     * 교체가 끝나면 free list 와 락 맵을 되돌린다. 둘 다 옛 파일 기준으로 쌓인 상태라
+     * 그대로 두면 새 파일과 어긋난다. 이 엔진에서 자원을 회수하는 곳은 여기뿐이다.
+     */
     public void rebuild(Consumer<SpatialRecordManager> loader) {
         cacheManager.rebuild(tempCm -> {
             SpatialRecordManager tempSrm = new SpatialRecordManager(tempCm, spatialIndex, engineMetrics);
@@ -237,34 +262,13 @@ public class SpatialRecordManager {
         this.pageLocks.clear();
     }
 
-    // -------------------------------------------------------------------------
-    // 유틸
-    // -------------------------------------------------------------------------
 
-    private int allocateOverflowPage() {
-        Integer pageId = overflowFreeList.poll();
-        if (pageId == null) {
-            throw new IllegalStateException("overflow page pool exhausted");
-        }
-        return pageId;
-    }
-
-    private static ConcurrentLinkedDeque<Integer> buildFreeList() {
-        ConcurrentLinkedDeque<Integer> freeList = new ConcurrentLinkedDeque<>();
-        for (int i = PRIMARY_PAGES; i < TOTAL_PAGES; i++) {
-            freeList.push(i);
-        }
-        return freeList;
-    }
-
-    // -------------------------------------------------------------------------
-    // 메트릭
-    // -------------------------------------------------------------------------
-
+    /** 아래 계층으로 위임한다. SpatialCacheEngine 이 메트릭을 한곳에서 모으기 위해 거쳐 간다. */
     public int getDirtyPageCount() {
         return cacheManager.getDirtyPageCount();
     }
 
+    /** free list 는 반납이 없으므로 "꺼낸 총량" 과 같다. */
     public int getUsedOverflowPageCount() {
         return OVERFLOW_PAGES - overflowFreeList.size();
     }
