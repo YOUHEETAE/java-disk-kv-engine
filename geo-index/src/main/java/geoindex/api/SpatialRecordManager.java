@@ -66,17 +66,29 @@ public class SpatialRecordManager {
 
     public void put(double lat, double lng, byte[] value) {
         int pageId = spatialIndex.toPageId(lat, lng);
-        Page page = cacheManager.getOrCreatePage(pageId);
-        writeWithOverflow(page, value);
+        writeWithOverflow(pageId, value);
     }
 
-    private void writeWithOverflow(Page page, byte[] value) {
-        // primaryPage 락 하나로 전체 체인 보호
-        int primaryPageId = page.getPageId();
+    /**
+     * 체인 끝까지 내려가며 레코드를 붙인다. 필요하면 overflow 페이지를 새로 단다.
+     *
+     * 락이 이 메서드에 있는 이유: 원자 단위가 "체인에 레코드 하나를 붙인다"이고,
+     * 그것이 여러 페이지와 여러 PageLayout 호출에 걸쳐 있다. 아래쪽(writeRecord 등)에
+     * 걸면 호출 하나하나는 안전해지지만 "꽉 찼나 확인 → overflow 할당 → 링크 설정"
+     * 순서가 원자적이지 않아, 두 스레드가 링크를 두 번 걸거나 서로를 덮는다.
+     * PageLayout 은 static 유틸이라 잠글 대상도 없고 체인이라는 개념도 모른다.
+     *
+     * 페이지 획득도 락 안에 있다. 밖에 두면 getOrCreatePage 가 초기화되지 않은 빈
+     * 페이지를 캐시에 넣은 뒤 락을 잡기 전까지 창이 생겨, 처음 쓰이는 칸을 동시에
+     * 조회한 독자가 그 페이지를 본다. 대가로 페이지 획득이 락 구간에 들어오는데,
+     * rebuild 적재 중에는 savePage 가 flush 때 한 번에 돌아 pageMap 이 계속 비어
+     * 있으므로 디스크는 읽지 않는다. flush 뒤에 put 이 오면 락 안에서 읽는다.
+     */
+    private void writeWithOverflow(int primaryPageId, byte[] value) {
         ReentrantReadWriteLock.WriteLock writeLock = getLock(primaryPageId).writeLock();
         writeLock.lock();
         try {
-            Page current = page;
+            Page current = cacheManager.getOrCreatePage(primaryPageId);
             while (true) {
                 if (!PageLayout.isInitialized(current)) {
                     PageLayout.initializePage(current);
@@ -175,10 +187,9 @@ public class SpatialRecordManager {
         ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
         readLock.lock();
         try {
-            // 여기만 던지지 않는다: put 이 getOrCreatePage 를 락 밖에서 불러,
-            // 처음 쓰이는 칸을 동시에 조회하면 초기화 전 페이지가 보인다 — 손상이 아니다.
             if (!PageLayout.isInitialized(page)) {
-                return Collections.emptyList();
+                throw new CorruptedIndexException(
+                        "page in file is not initialized: pageId=" + pageId, pageId);
             }
 
             List<byte[]> records = new ArrayList<>(PageLayout.readAllRecords(page));

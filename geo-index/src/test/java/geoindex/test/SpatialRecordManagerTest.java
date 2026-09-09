@@ -255,19 +255,21 @@ class SpatialRecordManagerTest {
     }
 
     /**
-     * primary 가 초기화돼 있지 않은 것은 손상이 아니다 — 던지지 않는다.
+     * primary 가 초기화돼 있지 않으면 던진다.
      *
-     * put 이 getOrCreatePage 를 락 밖에서 부르므로, 처음 쓰이는 칸을 동시에 조회하면
-     * 초기화 전 페이지가 보인다. 체인 쪽과 달리 여기서 던지면 정상적인 동시 쓰기가 실패한다.
+     * put 이 페이지 획득까지 쓰기 락 안에서 하므로, 정상 경로로는 초기화 전 페이지가
+     * 독자에게 보이지 않는다. 그래서 이 조건은 손상만 뜻한다 — 체인 쪽 두 조건과 같다.
      *
-     * 이 비대칭을 없애려면 페이지 획득을 쓰기 락 안으로 옮겨 창을 먼저 닫아야 한다.
-     * 그 전에 여기를 throw 로 바꾸면 이 테스트가 막는다.
+     * 이 테스트는 getOrCreatePage 를 직접 불러 그 상태를 만든다. put 을 거치지 않으므로
+     * 락 밖에서 만들어지고, 운영에서는 재현되지 않는 상태다.
      */
     @Test
-    void primary가_초기화되지_않았으면_예외가_아니다() {
+    void primary가_초기화되지_않았으면_예외() {
         int pageId = new GeoHashIndex().toPageId(37.4979, 127.0276);
         cacheManager.getOrCreatePage(pageId);               // 초기화 전 상태
 
-        assertTrue(manager.getAllCodesByPageId(pageId).isEmpty());
+        CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
+                () -> manager.getAllCodesByPageId(pageId));
+        assertEquals(pageId, e.getPageId());
     }
 }
