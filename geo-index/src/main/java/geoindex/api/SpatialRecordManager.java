@@ -103,6 +103,7 @@ public class SpatialRecordManager {
     // 파일 기반 검색
     // -------------------------------------------------------------------------
 
+    /** 운영 진입점. SpatialCacheEngine 이 부르는 것은 이 하나뿐이다. */
     public Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
         engineMetrics.incrementQueryCount();
         List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
@@ -116,42 +117,26 @@ public class SpatialRecordManager {
         return result;
     }
 
+    /** pageId 를 이미 아는 경우. 워밍업과 테스트가 쓴다. */
     public List<String> getAllCodesByPageId(int pageId) {
         return readAllCodesFromChain(pageId);
     }
 
+    /**
+     * 벤치마크 전용. 운영은 병원 코드만 필요하지만 벤치마크는 Hospital.fromBytes 로
+     * 레코드를 복원해야 해서 원본 바이트가 필요하다. 그래서 이 메서드만 반환 타입이 다르다.
+     */
     public List<byte[]> searchRadius(double lat, double lng, double radiusKm) {
         List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
         List<byte[]> results = new ArrayList<>();
 
         for (int pageId : pageIds) {
-            Page page = cacheManager.findPage(pageId);
-            if(page == null) continue;
-            ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
-            readLock.lock();
-            try {
-                if (!PageLayout.isInitialized(page)) continue;
-
-                results.addAll(PageLayout.readAllRecords(page));
-
-                int overflowPageId = PageLayout.getOverflowPageId(page);
-                while (overflowPageId != PageLayout.NO_OVERFLOW) {
-                    // overflow 페이지는 별도 락 없이 읽음
-                    // primaryPage 락이 전체 체인을 보호
-                    Page overflowPage = cacheManager.findPage(overflowPageId);
-                    if(overflowPage == null) break;
-                    if (!PageLayout.isInitialized(overflowPage)) break;
-                    results.addAll(PageLayout.readAllRecords(overflowPage));
-                    overflowPageId = PageLayout.getOverflowPageId(overflowPage);
-                }
-            } finally {
-                readLock.unlock();
-            }
+            results.addAll(readAllRecordsFromChain(pageId));
         }
-
         return results;
     }
 
+    /** searchRadiusCodesByPageId 를 평탄화한 것. pageId 별 묶음이 필요 없을 때 쓴다. */
     public List<String> searchRadiusCodes(double lat, double lng, double radiusKm) {
         List<String> codes = new ArrayList<>();
         searchRadiusCodesByPageId(lat, lng, radiusKm)
@@ -163,43 +148,47 @@ public class SpatialRecordManager {
     // overflow 체인 순회 (내부 공통 로직)
     // -------------------------------------------------------------------------
 
+    /** 체인의 레코드를 병원 코드 문자열로 바꾼다. 순회는 readAllRecordsFromChain 이 한다. */
+    private List<String> readAllCodesFromChain(int pageId) {
+        List<byte[]> records = readAllRecordsFromChain(pageId);
+        List<String> codes = new ArrayList<>(records.size());
+        for (byte[] record : records) {
+            codes.add(new String(record));
+        }
+        return codes;
+    }
+
     /**
+     * 체인 전체를 순회해 레코드를 원본 바이트로 모은다. 순회를 아는 코드는 여기뿐이다.
+     *
      * 존재 확인이 getLock 보다 앞에 온다. 순서를 바꾸면 없는 칸마다 락 객체가 남고,
      * 그 맵을 비우는 곳도 rebuild 뿐이다. 디스크 읽기까지 락 밖에서 끝나 락 구간도 짧아진다.
+     *
+     * primary 락 하나가 체인 전체를 보호한다. 읽기든 쓰기든 반드시 primary 를 거쳐
+     * 체인에 들어오므로, overflow 페이지는 자기 락을 따로 잡지 않는다.
      */
-    private List<String> readAllCodesFromChain(int pageId) {
-
+    private List<byte[]> readAllRecordsFromChain(int pageId) {
         Page page = cacheManager.findPage(pageId);
-        if(page == null) return Collections.emptyList();
-        // primaryPage 락 하나로 전체 체인 보호
+        if (page == null) return Collections.emptyList();
+
         ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
         readLock.lock();
         try {
             if (!PageLayout.isInitialized(page)) return Collections.emptyList();
 
-            List<String> codes = new ArrayList<>();
-            collectCodes(page, codes);
+            List<byte[]> records = new ArrayList<>(PageLayout.readAllRecords(page));
 
             int overflowPageId = PageLayout.getOverflowPageId(page);
             while (overflowPageId != PageLayout.NO_OVERFLOW) {
-                // overflow 페이지는 별도 락 없이 읽음
-                // primaryPage 락이 전체 체인을 보호
                 Page overflowPage = cacheManager.findPage(overflowPageId);
-                if(overflowPage == null) break;
+                if (overflowPage == null) break;
                 if (!PageLayout.isInitialized(overflowPage)) break;
-                collectCodes(overflowPage, codes);
+                records.addAll(PageLayout.readAllRecords(overflowPage));
                 overflowPageId = PageLayout.getOverflowPageId(overflowPage);
             }
-
-            return codes;
+            return records;
         } finally {
             readLock.unlock();
-        }
-    }
-
-    private void collectCodes(Page page, List<String> codes) {
-        for (byte[] bytes : PageLayout.readAllRecords(page)) {
-            codes.add(new String(bytes));
         }
     }
 
