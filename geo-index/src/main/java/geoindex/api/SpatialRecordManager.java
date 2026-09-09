@@ -1,6 +1,7 @@
 package geoindex.api;
 
 import geoindex.buffer.CacheManager;
+import geoindex.exception.CorruptedIndexException;
 import geoindex.index.SpatialIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.storage.Page;
@@ -174,15 +175,30 @@ public class SpatialRecordManager {
         ReentrantReadWriteLock.ReadLock readLock = getLock(pageId).readLock();
         readLock.lock();
         try {
-            if (!PageLayout.isInitialized(page)) return Collections.emptyList();
+            // 여기만 던지지 않는다: put 이 getOrCreatePage 를 락 밖에서 불러,
+            // 처음 쓰이는 칸을 동시에 조회하면 초기화 전 페이지가 보인다 — 손상이 아니다.
+            if (!PageLayout.isInitialized(page)) {
+                return Collections.emptyList();
+            }
 
             List<byte[]> records = new ArrayList<>(PageLayout.readAllRecords(page));
 
             int overflowPageId = PageLayout.getOverflowPageId(page);
+            int hops = 0;
             while (overflowPageId != PageLayout.NO_OVERFLOW) {
+                if (++hops > OVERFLOW_PAGES) {
+                    throw new CorruptedIndexException(
+                            "chain longer than the overflow pool: primary=" + pageId + " hops=" + hops, pageId);
+                }
                 Page overflowPage = cacheManager.findPage(overflowPageId);
-                if (overflowPage == null) break;
-                if (!PageLayout.isInitialized(overflowPage)) break;
+                if (overflowPage == null) {
+                    throw new CorruptedIndexException(
+                            "chain points to a missing page: primary=" + pageId + " next=" + overflowPageId, pageId);
+                }
+                if (!PageLayout.isInitialized(overflowPage)) {
+                    throw new CorruptedIndexException(
+                            "chain page is not initialized: primary=" + pageId + " next=" + overflowPageId, pageId);
+                }
                 records.addAll(PageLayout.readAllRecords(overflowPage));
                 overflowPageId = PageLayout.getOverflowPageId(overflowPage);
             }
