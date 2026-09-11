@@ -213,7 +213,7 @@ public class SpatialCacheEngine<T> {
     }
 
     public void persistWarmup() {
-        warmupStore.persist();
+        warmupStore.saveHitCounts();
     }
 
 }

@@ -71,11 +71,11 @@ public class WarmupStoreTest {
     }
 
     @Test
-    void persistAndLoadTest() throws IOException {
+    void saveAndLoadTest() throws IOException {
         warmupStore.recordAccess(3766);
         warmupStore.recordAccess(3766);
         warmupStore.recordAccess(4000);
-        warmupStore.persist();
+        warmupStore.saveHitCounts();
 
         WarmupStore warmupStore2 = new WarmupStore(Path.of(TEST_FILE));
         List<Integer> top = warmupStore2.getTopPageIds(2);
@@ -88,6 +88,27 @@ public class WarmupStoreTest {
         assertTrue(lines.contains("4000 1"));
         assertTrue(lines.contains("3766 2"));
 
+    }
+
+    @Test
+    void 파일이_깨졌을때도_기동은_살아남는다() throws IOException {
+        // 이 파일은 캐시 힌트일 뿐이다. 어떤 이유로 깨져 있어도 엔진 기동을 막으면 안 된다.
+        // 생성자가 GeoIndexEngine.builder().build() 안에서 불리므로, 여기서 던지면 서비스가 안 뜬다.
+        Path broken = Path.of("warmup_broken.store");
+        Files.write(broken, List.of(
+                "3766 2",
+                "﻿4000 1",          // 에디터가 붙인 BOM — 숫자가 아니다
+                "not a number at all"
+        ));
+        try {
+            WarmupStore store = assertDoesNotThrow(() -> new WarmupStore(broken),
+                    "숫자가 아닌 줄이 있어도 생성자는 던지면 안 된다");
+
+            store.recordAccess(5000);                       // 살아 있는 객체여야 한다
+            assertEquals(1, store.getHitCount(5000));
+        } finally {
+            Files.deleteIfExists(broken);
+        }
     }
 
     @Test

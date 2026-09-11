@@ -3,7 +3,6 @@ package geoindex.cache;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -23,7 +22,7 @@ public class WarmupStore {
     public WarmupStore(Path storePath) {
         this.storePath = storePath;
         this.hitCounts = new ConcurrentHashMap<>();
-        load();
+        loadHitCounts();
     }
 
     public void recordAccess(int pageId){
@@ -39,18 +38,18 @@ public class WarmupStore {
 
     }
 
-    public void persist() {
+    public void saveHitCounts() {
         try (BufferedWriter writer = Files.newBufferedWriter(storePath)) {
             for(Map.Entry<Integer, AtomicLong> entry : hitCounts.entrySet()){
                 writer.write(entry.getKey() + " " + entry.getValue().get());
                 writer.newLine();
             }
         } catch (IOException e) {
-            log.warning("[WarmupStore] persist 실패: " + e.getMessage());
+            log.warning("[WarmupStore] save 실패: " + e.getMessage());
         }
     }
 
-    private void load(){
+    private void loadHitCounts(){
         if(!Files.exists(storePath)) return;
         try(BufferedReader reader = Files.newBufferedReader(storePath)){
             String line;
@@ -62,8 +61,8 @@ public class WarmupStore {
                     hitCounts.put(pageId, new AtomicLong(hitCount));
                 }
             }
-        } catch(IOException e) {
-            log.warning("[WarmupStore] load 실패, fresh start로 동작: " + e.getMessage());
+        } catch(IOException | RuntimeException e) {
+            log.warning("[WarmupStore] load 중단, 읽은 줄까지만 사용: " + e.getMessage());
         }
     }
 
