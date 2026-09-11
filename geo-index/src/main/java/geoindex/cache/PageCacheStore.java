@@ -15,7 +15,7 @@ public class PageCacheStore<T> {
 
     public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics,  WarmupStore warmupStore) {
         this.policy = policy;
-        this.pageCache = new LinkedHashMap<>(16, 0.75f, true);
+        this.pageCache = new LinkedHashMap<>(16, 0.75f, policy.isMaxSizeEnabled());
         this.engineMetrics = engineMetrics;
         this.warmupStore = warmupStore;
     }
@@ -54,14 +54,16 @@ public class PageCacheStore<T> {
      * MISS 후 DB 조회 결과를 pageId 단위로 JVM에 저장
      */
     public synchronized void put(int pageId, List<T> data) {
-        if (policy.isMaxSizeEnabled() && pageCache.size() >= policy.getMaxSize()) {
+        if (policy.isMaxSizeEnabled()
+                && pageCache.size() >= policy.getMaxSize()
+                && !pageCache.containsKey(pageId)) {
             evictOne();
         }
 
         pageCache.put(pageId,
                 policy.isTtlEnabled()
-                        ? CacheEntry.of(data, Instant.now().plus(policy.getTtl()))
-                        : CacheEntry.of(data)
+                        ? CacheEntry.of(List.copyOf(data), Instant.now().plus(policy.getTtl()))
+                        : CacheEntry.of(List.copyOf(data))
         );
     }
 
@@ -69,7 +71,7 @@ public class PageCacheStore<T> {
     // JVM 캐시 초기화
     // -------------------------------------------------------------------------
 
-    public void clearCache() {
+    public synchronized void clearCache() {
         pageCache.clear();
     }
 
@@ -78,12 +80,12 @@ public class PageCacheStore<T> {
     // -------------------------------------------------------------------------
 
 
-    public boolean isCached(int pageId) {
+    public synchronized boolean isCached(int pageId) {
         CacheEntry<T> entry = pageCache.get(pageId);
         return entry != null && !entry.isExpired();
     }
 
-    public long getCacheSize() {
+    public synchronized long getCacheSize() {
         return pageCache.size();
     }
 
