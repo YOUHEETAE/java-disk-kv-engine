@@ -125,6 +125,8 @@ evict → 강북 제거 (head = 가장 오래전 접근)
 
 현재 기본값은 maxSize UNLIMITED이므로 eviction은 발생하지 않는다.
 → 핫스팟 pageId가 절대 날아가지 않음
+→ 이때는 access-order도 끈다 (`policy.isMaxSizeEnabled()`). 축출이 없으면 순서를 쓸 곳이 없는데
+  매 조회마다 링크를 재배치할 이유가 없다. maxSize를 켜는 순간 LRU가 된다.
 
 ---
 
@@ -233,34 +235,36 @@ pageId 전체 저장 → 반경 밖 데이터 포함 가능
 long getHitCount(int pageId)          // pageId별 누적 접근 횟수
 List<Integer> getTopPageIds(int n)    // 히트 횟수 내림차순 Top N
 void recordAccess(int pageId)         // 접근 시 카운트 증가
-void persist()                        // 히트 카운트 파일에 저장
+void saveHitCounts()                  // 히트 카운트 파일에 저장 (종료 시)
 ```
 
 **설계 원칙:**
 ```
 pageId별 접근 카운트 → ConcurrentHashMap<Integer, AtomicLong>
 파일 포맷: "pageId count" (한 줄에 하나)
-재시작 시 생성자에서 자동 load() → 히스토리 복원
-persist() 실패는 무시 → 엔진 동작에 영향 없음
+재시작 시 생성자에서 자동 loadHitCounts() → 히스토리 복원
+saveHitCounts() 실패는 로그만 남긴다 → 정확성에 관여하지 않으므로 종료를 막지 않음
+파일이 깨져 있어도(BOM, 손편집, 숫자 아닌 줄) 기동은 살아남는다
+→ 깨진 줄 앞까지 읽은 것은 유효한 쌍이므로 버리지 않고 쓴다
 rebuild 후 hitCounts 초기화 안 함 → 과거 히스토리가 워밍업 핵심
 ```
 
-**워밍업 흐름 (Spring 담당):**
+**워밍업 흐름:**
 ```
-서버 시작 @PostConstruct
-  → spatialCacheEngine.getWarmupCandidates(50)  // Top 50 pageId
-  → hospitalRepo.findByPageId(pageId)            // DB 조회
-  → spatialCacheEngine.putCache(pageId, data)    // JVM 캐시 적재
+서버 시작 @PostConstruct → AbstractSpatialCacheEngine.warmup()
+  → spatialCacheEngine.getWarmupTargets(warmupSize)   // Top N pageId → 각각의 코드 목록
+  → loadByCodes(chunk)  ×  (코드 수 / 1000)            // 서비스가 구현한 DB 조회, IN 절 청크
+  → spatialCacheEngine.putCache(pageId, data)          // 페이지별로 다시 나눠 적재
 
-서버 종료 @PreDestroy
-  → spatialCacheEngine.persistWarmup()           // 히트 카운트 저장
+서버 종료 @PreDestroy → shutdown()
+  → spatialCacheEngine.persistWarmup()                 // → WarmupStore.saveHitCounts()
 ```
 
 **Thread-safety:**
 ```
 recordAccess → computeIfAbsent + AtomicLong.incrementAndGet() → 원자적
 getTopPageIds → 스냅샷 정렬 → 읽기 전용 → 별도 동기화 불필요
-persist → 순간 스냅샷 기록 → 정확한 순간 값 보장 불필요
+saveHitCounts → 순회 중 값이 바뀔 수 있음 → 종료 시점이고 힌트라 정확한 순간 값 보장 불필요
 ```
 
 ---

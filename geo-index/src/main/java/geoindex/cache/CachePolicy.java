@@ -3,31 +3,14 @@ package geoindex.cache;
 import java.time.Duration;
 
 /**
- * 캐시 운영 정책 — Spring Config에서 생성해서 엔진에 주입
+ * 캐시 운영 정책 — 붙이는 쪽이 정하고 엔진은 실행만 한다.
  *
- * Why:
- *   "얼마나 유지할지(TTL)", "얼마나 저장할지(maxSize)"는
- *   서비스 운영 정책이므로 Spring이 결정한다.
- *   엔진은 정책을 받아서 실행만 한다.
+ * TTL 과 maxSize 는 서비스 운영 판단이라 엔진이 기본값을 고를 수 없다. 그래서 값은
+ * 밖에서 오고, 구현(CacheEntry.isExpired · PageCacheStore.evictOne)만 여기 있다.
  *
- *   TTL  구현 → 엔진 책임 (CacheEntry.isExpired())
- *   TTL  설정 → Spring 책임 (@Value 주입 → CachePolicy 생성)
- *
- * Spring Config 사용 예:
- *   @Value("${cache.ttl.days:0}")         // 0 = DISABLE
- *   private long ttlDays;
- *
- *   @Value("${cache.max-size:-1}")         // -1 = UNLIMITED
- *   private int maxSize;
- *
- *   CachePolicy.builder()
- *       .ttl(ttlDays == 0 ? CachePolicy.TTL_DISABLE : Duration.ofDays(ttlDays))
- *       .maxSize(maxSize)
- *       .build();
- *
- * 현재 서비스 기본값:
- *   TTL     → DISABLE (배치 완료 시 Spring @Scheduled → clearCache())
- *   maxSize → UNLIMITED (전체 캐시 23MB, 메모리 부담 없음)
+ * 기본값은 둘 다 "끔" 이다. 이 구성에서 캐시는 축출도 만료도 하지 않고 rebuild 뒤의
+ * clearCache() 로만 비운다 — 배치로만 바뀌는 데이터에는 TTL 보다 경계가 선명하다.
+ * maxSize 가 꺼져 있으면 PageCacheStore 는 access-order 도 끈다. 순서를 쓸 곳이 없다.
  */
 public class CachePolicy {
 
