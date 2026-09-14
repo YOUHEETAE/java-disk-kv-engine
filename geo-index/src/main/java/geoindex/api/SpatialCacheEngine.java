@@ -42,7 +42,7 @@ public class SpatialCacheEngine<T> {
         this(spatialRecordManager, cachePolicy, engineMetrics, null);
     }
 
-    private List<T> getOrLoad(int pageId, List<String> codes, Function<List<String>, List<T>> loader){
+    private List<T> getOrLoad(int pageId, List<String> codes, Function<List<String>, List<T>> loader) {
         PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
         if (result.isHit()) return result.getCached();
 
@@ -70,75 +70,103 @@ public class SpatialCacheEngine<T> {
 
     }
 
-    public List<T> search (double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader){
+    public List<T> search (double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader) {
         Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
         
-        Map<Integer, List<T>> hitResults = new LinkedHashMap<>();
-        Map<Integer, CompletableFuture<List<T>>> waitFuture = new LinkedHashMap<>();
-        Map<Integer, List<String>> toLoad = new LinkedHashMap<>();
-        Map<Integer, CompletableFuture<List<T>>> myFuture = new LinkedHashMap<>();
+        PageLoadState<T> state = new PageLoadState<>();
 
+        classifyPageStates(codesByPageId, state);
+
+        // 내 몫을 전부 complete 한 뒤에야 남의 future 를 join 한다. 이 순서가 데드락이 없는
+        // 유일한 근거다 — A 가 page1 승자·page2 패자, B 가 그 반대일 때 둘 다 자기 몫을
+        // 먼저 끝내므로 사이클이 생기지 않는다. loadPages 와 assembleResults 를 바꾸면 깨진다.
+        loadPages(state, batchLoader);
+
+        return assembleResults(codesByPageId, state);
+    }
+
+    private void classifyPageStates(Map<Integer, List<String>> codesByPageId, PageLoadState<T> state) {
         for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
             int pageId = entry.getKey();
             List<String> codes = entry.getValue();
+
             PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
+
             if (result.isHit()) {
-                hitResults.put(pageId, result.getCached());
+                state.putReadyPage(pageId, result.getCached());
                 continue;
             }
+
             CompletableFuture<List<T>> future = new CompletableFuture<>();
             CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
+
             if(existing == null){
-                PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
-                if (recheck.isHit()) {
-                    future.complete(recheck.getCached());
-                    pendingLoads.remove(pageId);
-                    hitResults.put(pageId, recheck.getCached());
-                } else {
-                  toLoad.put(pageId, codes);
-                  myFuture.put(pageId, future);
-                }
+                recheckAndClassify(pageId, codes, state, future);
             } else {
-                waitFuture.put(pageId, existing);
+                state.addWaitingFuture(pageId, existing);
             }
         }
-        if(!toLoad.isEmpty()){
-            try {
-                List<String> codes = toLoad.values().stream()
-                        .flatMap(Collection::stream)
-                        .distinct()
+    }
+
+    private void recheckAndClassify(int pageId,
+                                   List<String> codes,
+                                   PageLoadState<T> state,
+                                   CompletableFuture<List<T>> future){
+        PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
+        if (recheck.isHit()) {
+            future.complete(recheck.getCached());
+            pendingLoads.remove(pageId, future);
+            state.putReadyPage(pageId, recheck.getCached());
+        } else {
+            state.addPageToLoad(pageId, codes);
+            state.registerMyFuture(pageId, future);
+        }
+    }
+
+    private void loadPages(PageLoadState<T> state, Function<List<String>, Map<String, T>> batchLoader) {
+        if(!state.hasPageToLoad()) return;
+
+        try {
+            List<String> codesToLoad = state.getCodesToLoad();
+            Map<String, T> loaded = batchLoader.apply(codesToLoad);
+
+            state.forEachPageToLoad((pageId, codes) -> {
+                List<T> pageData = codes.stream()
+                        .map(loaded::get)
+                        .filter(Objects::nonNull)
                         .collect(Collectors.toList());
-                Map<String, T> loaded = batchLoader.apply(codes);
-                for (Map.Entry<Integer, List<String>> entry : toLoad.entrySet()) {
-                    int pageId = entry.getKey();
-                    List<T> pageData = entry.getValue().stream()
-                            .map(loaded::get)
-                            .filter(Objects::nonNull)
-                            .collect(Collectors.toList());
-                    putCache(pageId, pageData);
-                    myFuture.get(pageId).complete(pageData);
-                }
-            } catch (Exception e){
-                myFuture.values().forEach(f -> f.completeExceptionally(e));
-                throw e;
-            } finally {
-                myFuture.keySet().forEach(pendingLoads::remove);
-            }
+
+                putCache(pageId, pageData);
+                state.putReadyPage(pageId, pageData);
+                state.getMyFuture(pageId).complete(pageData);
+            });
+        } catch (Exception e){
+            state.propagateFailure(e);
+            throw e;
+        } finally {
+            // 정상 경로에서는 위 루프가 전부 complete 했으므로 no-op 이다. catch(Exception) 을
+            // 건너뛰는 Error 경로에서만 실제로 동작해, existing 을 쥔 대기 스레드를 풀어준다.
+            state.forEachMyFuture((id, f) -> {
+                f.completeExceptionally(new IllegalStateException("loader did not complete: " + id));
+                pendingLoads.remove(id, f);
+            });
         }
+    }
+
+    private List<T> assembleResults(Map<Integer, List<String>> codesByPageId, PageLoadState<T> state) {
         List<T> result = new ArrayList<>();
+
         for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
             int pageId = entry.getKey();
-            if(hitResults.containsKey(pageId)){
-                result.addAll(hitResults.get(pageId));
-            } else if (myFuture.containsKey(pageId)) {
-                result.addAll(myFuture.get(pageId).getNow(List.of()));
-            } else if (waitFuture.containsKey(pageId)) {
-                result.addAll(waitFuture.get(pageId).join());
+
+            if(state.hasReadyPage(pageId)){
+                result.addAll(state.getReadyPage(pageId));
+            } else if (state.hasWaitingFuture(pageId)) {
+                result.addAll(state.getWaitingFuture(pageId).join());
             }
         }
         return result;
     }
-
 
     // -------------------------------------------------------------------------
     // search() — pageId 조회 + HIT/MISS 판단 위임

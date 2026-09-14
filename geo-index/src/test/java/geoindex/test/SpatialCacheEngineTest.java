@@ -17,12 +17,17 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -296,6 +301,77 @@ class SpatialCacheEngineTest {
                 metricsSnapshot.overflowPageUsed
         );
     }
+    // -------------------------------------------------------------------------
+    // search 의 기본 계약 — 미스로 로드한 데이터가 결과에 들어 있어야 한다
+    // 기존 테스트는 loader 호출 횟수만 셌다. 그래서 결과가 통째로 빠져도 통과했다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void MISS로_로드한_데이터가_결과에_들어있다() {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        spatialRecordManager.put(37.4979, 127.0276, "B0002".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        List<String> result = engine.search(37.4979, 127.0276, 1.0, codes -> {
+            Map<String, String> m = new HashMap<>();
+            for (String c : codes) m.put(c, "v-" + c);
+            return m;
+        });
+
+        assertEquals(2, result.size(), "미스로 로드한 페이지의 값이 결과에서 빠지면 안 된다");
+        assertTrue(result.contains("v-B0001"));
+        assertTrue(result.contains("v-B0002"));
+    }
+
+    // -------------------------------------------------------------------------
+    // loader 가 Error 를 던지면 — catch(Exception) 을 건너뛴다.
+    // 승자 스레드는 Error 로 죽지만, 그 future 를 쥔 대기 스레드는 finally 가 풀어줘야 한다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void loader가_Error를_던져도_대기_스레드는_깨어난다() throws Exception {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        CountDownLatch winnerInsideLoader = new CountDownLatch(1);   // 승자가 loader 안에 들어왔다
+        CountDownLatch releaseWinner      = new CountDownLatch(1);   // 승자를 놓아준다 → Error 를 던진다
+        AtomicBoolean waiterLoaderCalled  = new AtomicBoolean(false);
+        AtomicReference<Throwable> waiterOutcome = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> winner = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                winnerInsideLoader.countDown();
+                try { releaseWinner.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                throw new StackOverflowError("simulated");             // Exception 이 아니다
+            }));
+            winnerInsideLoader.await(3, TimeUnit.SECONDS);
+
+            Future<?> waiter = pool.submit(() -> {
+                try {
+                    engine.search(37.4979, 127.0276, 1.0, codes -> {
+                        waiterLoaderCalled.set(true);                  // 여기 오면 안 된다 — 승자의 future 를 기다려야 한다
+                        return Map.of();
+                    });
+                } catch (Throwable t) {
+                    waiterOutcome.set(t);
+                }
+            });
+            Thread.sleep(200);                                         // 대기자가 join() 에 도달할 시간
+            releaseWinner.countDown();
+
+            assertThrows(Exception.class, () -> winner.get(3, TimeUnit.SECONDS), "승자는 Error 로 끝난다");
+            waiter.get(3, TimeUnit.SECONDS);                           // 여기서 TimeoutException 이면 영구 대기다
+
+            assertFalse(waiterLoaderCalled.get(), "대기자는 직접 로드하지 않고 승자의 future 를 기다렸어야 한다");
+            assertNotNull(waiterOutcome.get(), "대기자는 예외로 깨어나야 한다 — 빈 결과로 넘어가면 안 된다");
+        } finally {
+            releaseWinner.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     void loader_1번_호출_검증() throws InterruptedException {
         spatialRecordManager.put( 33.4996, 126.5312 , "B0001".getBytes());
