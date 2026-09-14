@@ -21,8 +21,8 @@ public interface SpatialIndex {
 
 | 메서드 | 역할 |
 |--------|------|
-| `toMorton(lat, lng, precision)` | 좌표 → Morton 코드 (Z-curve 비트 인터리빙) |
-| `interleave(lngBits, latBits)` | lngBits / latBits → Morton 재조합 |
+| `toMorton(lat, lng, bitsPerAxis)` | 좌표 → Morton 코드 (Z-curve 비트 인터리빙) |
+| `interleave(lngBits, latBits, bitsPerAxis)` | lngBits / latBits → Morton 재조합. `toMorton` 과 같은 값에 도달한다 |
 
 **Morton 코드란?**
 
@@ -88,7 +88,7 @@ getPageIds():
 결과: 반경 5km = 187개 pageId로 분산 (이전 1~2개 → 187개) ✅
 ```
 
-#### 5차: getPageIds() 경계값 오버플로우 수정 (현재)
+#### 5차: getPageIds() 경계값 오버플로우 수정
 
 ```
 4차 구현에서 maxLatBits/maxLngBits 계산 시 유효 범위 초과 문제 발견.
@@ -113,32 +113,41 @@ long maxLngBits = Math.min((1L << 15) - 1, lngToBits(maxLng, PRECISION) + 1);
 
 이 버그는 단일 스레드에서도 재현되는 로직 버그다. 극좌표(위도 ±90°, 경도 ±180°) 근처 좌표를 검색할 때 경계 셀의 페이지가 누락된다.
 
+#### 6차: PRECISION 제거 · 정렬 반환 (현재)
+
 ```
-Morton 값 자체를 pageId로 사용
-DiskManager sparse 매핑: HashMap<pageId, 파일오프셋>
-→ pageId가 6천만이어도 실제 파일 = 데이터 페이지 수 × 4KB
+PRECISION 은 파라미터처럼 보였지만 축당 비트 15가 세 곳에 하드코딩돼 있었다.
+값을 바꾸면 삽입은 새 해상도로, 검색은 15비트로 재조합해 서로 다른 pageId 를 만든다.
+→ BITS_PER_AXIS 로 대체하고 파생값 MAX_GRID_INDEX 로 하드코딩을 걷어냈다.
+  precision 은 GeoHash 문자열의 단위(base32 문자 = 5비트)인데 이 엔진은 문자열을 만들지 않는다.
 
-getPageIds():
-  네 꼭짓점 → deinterleave → lngBits/latBits 범위 추출
-  → 격자 순회 → Morton 재조합 → pageId 수집
+getPageIds 가 HashSet 에 모았다 옮겨 담고 있었다.
+호출자가 해시 버킷 순서로 findPage 를 불렀고 그것이 곧 seek 순서였다.
+→ ArrayList 에 담아 정렬. interleave 가 전단사라 중복 제거는 애초에 불필요했다.
+  flush 가 파일을 pageId 순으로 배치하므로 조회도 오름차순이어야 그 배치를 쓴다.
 
-결과: 반경 5km = 187개 pageId로 분산 (이전 1~2개 → 187개) ✅
+경계를 사방 한 칸씩 넓혔다 (min -1, max +1).
+latToBits 가 내림하므로 MBR 경계가 칸 경계에 걸치면 그 칸이 빠진다 — 반경 안의 데이터가
+예외 없이 조용히 누락된다. 대가는 후보 증폭이고 반경이 작을수록 크다.
 ```
 
 **현재 구현:**
 
 ```java
+private static final int  BITS_PER_AXIS  = 15;                        // 축당 비트. 16 이상이면 int 를 넘친다
+private static final long MAX_GRID_INDEX = (1L << BITS_PER_AXIS) - 1;  // 클램핑용
+
 // toPageId: Morton 직접 사용
 public int toPageId(double lat, double lng) {
-    return (int) GeoHash.toMorton(lat, lng, PRECISION);
+    return (int) GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
 }
 
-// getPageIds: 네 꼭짓점 → 격자 범위 → 전체 순회 (경계값 클램핑 포함)
+// getPageIds: MBR → 격자 범위(사방 +1, 0~MAX_GRID_INDEX 클램핑) → 전체 순회 → 정렬
 public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
-    // MBR 네 꼭짓점 좌표 계산
-    // latToBits/lngToBits → minLngBits~maxLngBits, minLatBits~maxLatBits
-    // Math.min((1L<<15)-1, ...) 으로 상한 클램핑
-    // 격자 순회 → interleave → (int)morton = pageId
+    // km → 도 (위도는 상수, 경도는 cos(lat) 보정)
+    // latToBits/lngToBits → min-1 ~ max+1, Math.max(0, …) / Math.min(MAX_GRID_INDEX, …)
+    // 이중 루프 → interleave → (int) morton
+    // Collections.sort → 반환
 }
 ```
 
