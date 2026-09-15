@@ -10,6 +10,15 @@ import geoindex.storage.DiskManager;
 
 import java.nio.file.Path;
 
+/**
+ * 엔진 조립 진입점. 내부 컴포넌트 7개(EngineMetrics · DiskManager · CacheManager · GeoHashIndex ·
+ * SpatialRecordManager · WarmupStore · SpatialCacheEngine)를 순서대로 엮는다. 조립 순서와
+ * 공유 관계(EngineMetrics 하나를 전 계층이 나눠 쓴다)는 붙이는 쪽이 알 필요가 없다.
+ *
+ * dbFile 과 warmupFile 은 필수다. 빠지면 build() 에서 IllegalStateException — 파일을 만들기
+ * 전에 검사하므로 실패해도 흔적이 남지 않는다. cachePolicy 는 선택이고, 안 주면
+ * CachePolicy.DEFAULT(TTL 끔 · 크기 무제한 · 예열 3000).
+ */
 public class GeoIndexEngine {
     private GeoIndexEngine (){}
 

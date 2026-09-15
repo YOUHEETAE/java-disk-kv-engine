@@ -7,6 +7,15 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
+/**
+ * search 한 번의 분류 상태. 각 pageId 는 셋 중 하나다.
+ *   readyPages       손에 있다 — 캐시 HIT 이거나 내가 방금 로드했다. 조립 때 그대로 쓴다
+ *   waitingFutures   남이 로드 중이다 — 조립 때 join 한다
+ *   pagesToLoad      내가 로드할 것이다 — myFutures 가 그 약속. 로드가 끝나면 readyPages 로 옮긴다
+ *
+ * 요청 하나가 만들고 버리는 객체라 동기화가 없다. pendingLoads(엔진의 공유 맵)와는 다르다 —
+ * 이 클래스는 pendingLoads 를 모르고, 거기서 빼는 것은 엔진의 일이다.
+ */
 class PageLoadState<T> {
     private final Map<Integer, List<T>> readyPages = new LinkedHashMap<>();
     private final Map<Integer, CompletableFuture<List<T>>> waitingFutures = new LinkedHashMap<>();

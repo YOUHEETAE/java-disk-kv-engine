@@ -15,7 +15,7 @@
 GeoIndexEngine.<T>builder()
     .dbFile("place.db")           // 필수 — 색인 파일 경로
     .warmupFile("place.store")    // 필수 — 워밍업 히트 카운트 저장 경로
-    .cachePolicy(CachePolicy.DEFAULT)  // 선택 — 기본값: TTL 비활성화, 크기 무제한
+    .cachePolicy(CachePolicy.DEFAULT)  // 선택 — 기본값: TTL 비활성화 · 크기 무제한 · 예열 3000
     .build()                      // → SpatialCacheEngine<T> 반환
 ```
 
@@ -23,9 +23,12 @@ GeoIndexEngine.<T>builder()
 |------|-----------|------|
 | `dbFile` | 필수 | 색인 파일 경로. 누락 시 `IllegalStateException` |
 | `warmupFile` | 필수 | 워밍업 히트 카운트 영속 파일 경로. 누락 시 `IllegalStateException` |
-| `cachePolicy` | 선택 | TTL / maxSize 정책. 기본값 `CachePolicy.DEFAULT` |
+| `cachePolicy` | 선택 | TTL / maxSize / warmupSize 정책. 기본값 `CachePolicy.DEFAULT` |
+
+필수값 검사는 파일을 만들기 전에 하므로 실패해도 흔적이 남지 않는다.
 
 > Spring에서는 `@Bean(destroyMethod = "close")`로 등록해야 종료 시 flush + 파일 닫음이 보장된다.
+> 접근 횟수 저장은 `close()`가 하지 않는다 — `@PreDestroy`에서 `shutdown()`을 따로 불러야 한다.
 
 ---
 
@@ -50,9 +53,12 @@ public MetricsSnapshot getMetrics()
 | 메서드 | 설명 |
 |--------|------|
 | `search` | MISS 시 loadByCodes 자동 호출 → 캐시 저장 → 반환 |
-| `warmup` | WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache |
-| `rebuild` | loader → 색인 재구축 + JVM 캐시 초기화 + warmup 재실행 |
-| `shutdown` | `persistWarmup()` — `@PreDestroy`에서 호출 |
+| `warmup` | 정책이 정한 개수(warmupSize · maxSize)만큼 Top N pageId → DB IN 쿼리 청크 분할 → 인기 오름차순으로 putCache |
+| `rebuild` | loader → 색인 재구축 + JVM 캐시 초기화 + warmup. 예열이 실패하면 `WarmupFailedException` — 재구축은 이미 끝났으므로 원래 예외로 위장하지 않는다 |
+| `shutdown` | `saveWarmup()` — `@PreDestroy`에서 호출 |
+
+`warmup`이 인기 오름차순으로 넣는 이유: LRU는 먼저 들어온 것부터 버린다. 인기 순서대로 넣으면 가장 인기 있는 것이
+가장 먼저 나간다. 뒤집어 넣어 예열 직후의 LRU 순서가 인기 순서와 같게 만든다.
 
 ---
 
@@ -89,37 +95,39 @@ List<String> getAllCodesByPageId(int pageId)
 
 **API:**
 ```java
-// Batch Loading Cache — HIT/MISS 분류 + 배치 DB 조회 + 캐시 저장 + 결과 반환 one-call
+// 검색 — 분류 · 배치 로딩 · 조립. 반경 검색 한 번 = DB 왕복 최대 한 번
 List<T> search(double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader)
-
-// 내부 캐시 직접 제어 (searchV1 / 워밍업용)
-List<PageResult<T>> search(double lat, double lng, double radiusKm)
 void putCache(int pageId, List<T> data)
 
+// 무효화 — 비우기와 세대 교체는 한 쌍
 void rebuild(Consumer<SpatialRecordManager> loader)
 void clearCache()
 
-boolean isCached(int pageId)
-long getCacheSize()
-CachePolicy getPolicy()
+// 예열
+Map<Integer, List<String>> getWarmupTargets()
+void saveWarmup()
 
-Map<Integer, List<String>> getWarmupTargets(int n)
-List<Integer> getWarmupCandidates(int n)
-void persistWarmup()
+// 관측
+MetricsSnapshot getMetrics()
+long getCacheSize()
+boolean isCached(int pageId)
+void close()
 ```
 
 | 메서드 | 반환 | 용도 |
 |--------|------|------|
-| `search(batchLoader)` | `List<T>` | Batch Load — MISS codes 수집 → DB 1회 → 캐시 저장 → 결과 반환 (권장) |
-| `search` | `List<PageResult<T>>` | HIT/MISS 판단만 → 호출자가 직접 DB 조회 + putCache (searchV1 / 워밍업) |
-| `putCache` | void | MISS 후 DB 결과 JVM 캐시 저장 |
-| `rebuild` | void | 파일 재구축 + JVM 캐시 초기화 |
-| `clearCache` | void | JVM 캐시만 초기화 |
-| `isCached` | boolean | 특정 pageId 캐시 여부 확인 |
+| `search(batchLoader)` | `List<T>` | MISS codes 수집 → DB 1회 → 캐시 저장 → 결과 반환. 같은 페이지를 여러 스레드가 동시에 미스하면 한 스레드만 DB를 친다(`pendingLoads`) |
+| `putCache` | void | 예열이 DB 결과를 넣는 통로. `search`는 자기 안에서 직접 넣는다 |
+| `rebuild` | void | 파일 재구축 + `clearCache()`. 예열은 하지 않는다 — `AbstractSpatialCacheEngine.rebuild`가 이어서 한다 |
+| `clearCache` | void | JVM 캐시 비우기 + 세대 번호 증가. 비우기 전에 시작된 로딩이 늦게 도착해도 캐시에 들어가지 않는다 |
+| `getWarmupTargets` | `Map<Integer, List<String>>` | 정책(warmupSize · maxSize)이 정한 개수만큼 Top N pageId + codes. 인기 내림차순, 순서가 계약 |
+| `saveWarmup` | void | 히트 카운트 디스크 저장. `shutdown()`이 부른다 |
+| `getMetrics` | `MetricsSnapshot` | 전 계층 메트릭 |
 | `getCacheSize` | long | 현재 캐시 항목 수 |
-| `getWarmupTargets` | `Map<Integer, List<String>>` | Top N pageId + 해당 codes 반환 (Spring 워밍업 일괄 조회용) |
-| `getWarmupCandidates` | `List<Integer>` | 히트 횟수 Top N pageId 반환 |
-| `persistWarmup` | void | 히트 카운트 디스크 저장 (Spring @PreDestroy용) |
+| `isCached` | boolean | 존재 + 미만료. 관측용 — access-order라 이 호출도 LRU 순서를 바꾼다 |
+
+판정만 돌려주던 `search(lat, lng, radiusKm)`는 없다. 템플릿 메서드가 생기기 전 스프링이 판정을 받아 직접 DB를 조회하던
+흐름이었고, `pendingLoads` 보호가 없는 쪽이라 지웠다.
 
 **생성 방법:**
 
@@ -252,7 +260,7 @@ FullScan: 5234건 | GeoIndex: 5234건 | 일치: true | 누락: 0건 ✅
 
 ### PageResult\<T\> (값 객체)
 
-`search()` 결과를 pageId 단위로 HIT/MISS 분리해서 표현합니다.
+`PageCacheStore.getOrMiss()`가 판정을 돌려주는 타입. `SpatialCacheEngine` 안에서만 쓰인다 — cache 패키지로 옮길 후보다.
 
 ```java
 PageResult.hit(pageId, List<T> cached)         // HIT: 캐시 데이터 포함

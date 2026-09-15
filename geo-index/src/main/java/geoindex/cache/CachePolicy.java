@@ -87,7 +87,8 @@ public class CachePolicy {
     @Override
     public String toString() {
         return "CachePolicy{ttl=" + (isTtlEnabled() ? ttl : "DISABLE") +
-                ", maxSize=" + (isMaxSizeEnabled() ? maxSize : "UNLIMITED") + '}';
+                ", maxSize=" + (isMaxSizeEnabled() ? maxSize : "UNLIMITED") +
+                ", warmupSize=" + (isWarmupAll() ? "ALL" : warmupSize) + '}';
     }
 
     public int getWarmupSize() {
