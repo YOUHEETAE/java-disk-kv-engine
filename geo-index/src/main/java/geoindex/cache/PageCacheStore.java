@@ -62,6 +62,12 @@ public class PageCacheStore<T> {
         return PageResult.miss(pageId, codes);
     }
 
+    /** 판정만 한다 — 메트릭도 접근 기록도 올리지 않는다. 같은 요청의 double-check 용. */
+    public synchronized List<T> peekIfCached(int pageId) {
+        CacheEntry<T> cached = pageCache.get(pageId);
+        return (cached != null && !cached.isExpired()) ? cached.getData() : null;
+    }
+
     /**
      * DB 조회 결과를 pageId 단위로 저장한다. 같은 pageId 면 교체다.
      *

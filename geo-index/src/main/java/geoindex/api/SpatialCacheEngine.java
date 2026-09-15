@@ -81,11 +81,12 @@ public class SpatialCacheEngine<T> {
                                    List<String> codes,
                                    PageLoadState<T> state,
                                    CompletableFuture<List<T>> future){
-        PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
-        if (recheck.isHit()) {
-            future.complete(recheck.getCached());
+        // getOrMiss 가 아니다 — 같은 요청의 두 번째 판정이라 메트릭과 접근 기록을 다시 올리면 안 된다
+        List<T> cached = pageCacheStore.peekIfCached(pageId);
+        if (cached != null) {
+            future.complete(cached);
             pendingLoads.remove(pageId, future);
-            state.putReadyPage(pageId, recheck.getCached());
+            state.putReadyPage(pageId, cached);
         } else {
             state.addPageToLoad(pageId, codes);
             state.registerMyFuture(pageId, future);
