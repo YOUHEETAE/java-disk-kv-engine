@@ -184,9 +184,10 @@ public class SpatialCacheEngine<T> {
     // warmup
     // -------------------------------------------------------------------------
 
-    public Map<Integer, List<String>> getWarmupTargets(int n) {
+    public Map<Integer, List<String>> getWarmupTargets() {
         CachePolicy policy = pageCacheStore.getPolicy();
-        int limit = policy.isMaxSizeEnabled() ? Math.min(n, policy.getMaxSize()) : n;
+        int wanted = policy.isWarmupAll() ? Integer.MAX_VALUE : policy.getWarmupSize();
+        int limit = policy.isMaxSizeEnabled() ? Math.min(wanted, policy.getMaxSize()) : wanted;
         return warmupStore.getTopPageIds(limit).stream()
                 .collect(Collectors.toMap(
                         pageId -> pageId,
@@ -196,7 +197,7 @@ public class SpatialCacheEngine<T> {
                 ));
     }
 
-    public void persistWarmup() {
+    public void saveWarmup() {
         warmupStore.saveHitCounts();
     }
 

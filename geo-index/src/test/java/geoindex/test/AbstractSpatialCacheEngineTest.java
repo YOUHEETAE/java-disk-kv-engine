@@ -152,6 +152,44 @@ class AbstractSpatialCacheEngineTest {
         assertFalse(two.isCached(pageIds[1]), "가장 인기 없는 쪽인 P1 이 나가야 한다");
     }
 
+    // -------------------------------------------------------------------------
+    // warmupSize — 안 주면 3000, n 이면 상위 n개, WARMUP_ALL(-1) 이면 기록 전부
+    // -------------------------------------------------------------------------
+
+    @Test
+    void warmupSize가_상위_n개를_자르고_WARMUP_ALL은_기록_전부를_예열한다() {
+        double[][] spots = { {37.4979, 127.0276}, {37.5665, 126.9780}, {37.5133, 127.1001} };
+        int[] pageIds = new int[3];
+        for (int i = 0; i < 3; i++) {
+            recordManager.put(spots[i][0], spots[i][1], ("P" + i).getBytes());
+            pageIds[i] = index.toPageId(spots[i][0], spots[i][1]);
+        }
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        WarmupStore store = new WarmupStore(Path.of(WARMUP_FILE));
+        for (int i = 0; i < 3; i++) store.recordAccess(pageIds[0]);
+        for (int i = 0; i < 2; i++) store.recordAccess(pageIds[1]);
+        store.recordAccess(pageIds[2]);
+
+        // warmupSize = 1 → 가장 인기 있는 하나만 DB 에서 가져온다
+        List<String> askedOne = new java.util.ArrayList<>();
+        TestEngine one = new TestEngine(new SpatialCacheEngine<>(recordManager,
+                CachePolicy.builder().warmupSize(1).build(), metrics, store));
+        one.loader = codes -> { askedOne.addAll(codes); return Map.of(); };
+        one.warmup();
+        assertEquals(List.of("P0"), askedOne, "상위 1개만 예열해야 한다");
+
+        // WARMUP_ALL → 기록된 셋 전부
+        List<String> askedAll = new java.util.ArrayList<>();
+        TestEngine all = new TestEngine(new SpatialCacheEngine<>(recordManager,
+                CachePolicy.builder().warmupSize(CachePolicy.WARMUP_ALL).build(), metrics, store));
+        all.loader = codes -> { askedAll.addAll(codes); return Map.of(); };
+        all.warmup();
+        assertEquals(3, askedAll.size(), "기록 전부를 예열해야 한다");
+        assertTrue(askedAll.containsAll(List.of("P0", "P1", "P2")));
+    }
+
     @Test
     void 예열이_성공하면_예외도_카운터도_없다() {
         TestEngine service = new TestEngine(engine);

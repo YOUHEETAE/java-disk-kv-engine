@@ -11,7 +11,6 @@ import java.util.stream.Collectors;
 public abstract class AbstractSpatialCacheEngine<T> {
 
     protected final SpatialCacheEngine<T> spatialCacheEngine;
-    protected int warmupSize = 3000;
 
     protected AbstractSpatialCacheEngine(SpatialCacheEngine<T> spatialCacheEngine) {
         this.spatialCacheEngine = spatialCacheEngine;
@@ -52,7 +51,7 @@ public abstract class AbstractSpatialCacheEngine<T> {
     }
 
     public void warmup() {
-        Map<Integer, List<String>> targets = spatialCacheEngine.getWarmupTargets(warmupSize);
+        Map<Integer, List<String>> targets = spatialCacheEngine.getWarmupTargets();
         List<String> allCodes = targets.values().stream()
                 .flatMap(Collection::stream)
                 .collect(Collectors.toList());
@@ -79,7 +78,7 @@ public abstract class AbstractSpatialCacheEngine<T> {
     }
 
     public void shutdown() {
-        spatialCacheEngine.persistWarmup();
+        spatialCacheEngine.saveWarmup();
     }
 
     public MetricsSnapshot getMetrics() {
