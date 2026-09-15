@@ -28,10 +28,6 @@ public class SpatialCacheEngine<T> {
      */
     private final AtomicInteger generation = new AtomicInteger();
 
-    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, EngineMetrics engineMetrics) {
-        this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics, null);
-    }
-
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, CachePolicy cachePolicy, EngineMetrics engineMetrics,  WarmupStore warmupStore) {
         this.spatialRecordManager = spatialRecordManager;
         this.engineMetrics = engineMetrics;
@@ -41,11 +37,6 @@ public class SpatialCacheEngine<T> {
 
     public void close(){
         spatialRecordManager.close();
-    }
-
-    public SpatialCacheEngine(SpatialRecordManager spatialRecordManager,
-                              CachePolicy cachePolicy, EngineMetrics engineMetrics) {
-        this(spatialRecordManager, cachePolicy, engineMetrics, null);
     }
 
     private List<T> getOrLoad(int pageId, List<String> codes, Function<List<String>, List<T>> loader) {
@@ -247,10 +238,14 @@ public class SpatialCacheEngine<T> {
     }
 
     public Map<Integer, List<String>> getWarmupTargets(int n) {
-        return warmupStore.getTopPageIds(n).stream()
+        CachePolicy policy = pageCacheStore.getPolicy();
+        int limit = policy.isMaxSizeEnabled() ? Math.min(n, policy.getMaxSize()) : n;
+        return warmupStore.getTopPageIds(limit).stream()
                 .collect(Collectors.toMap(
                         pageId -> pageId,
-                        spatialRecordManager::getAllCodesByPageId
+                        spatialRecordManager::getAllCodesByPageId,
+                        (a, b) -> a,
+                        LinkedHashMap::new
                 ));
     }
 

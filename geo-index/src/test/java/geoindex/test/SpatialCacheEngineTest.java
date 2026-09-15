@@ -5,6 +5,7 @@ import geoindex.api.SpatialRecordManager;
 import geoindex.api.SpatialCacheEngine;
 import geoindex.buffer.CacheManager;
 import geoindex.cache.CachePolicy;
+import geoindex.cache.WarmupStore;
 import geoindex.index.GeoHashIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
@@ -34,6 +35,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class SpatialCacheEngineTest {
 
     static final String TEST_FILE = "test_cache_engine.db";
+    static final String WARMUP_FILE = "test_cache_engine.store";
+    WarmupStore warmupStore;
     EngineMetrics metrics;
     DiskManager diskManager;
     CacheManager cacheManager;
@@ -48,7 +51,8 @@ class SpatialCacheEngineTest {
         cacheManager = new CacheManager(diskManager, metrics);
         geoHashIndex = new GeoHashIndex();
         spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        engine = new SpatialCacheEngine<>(spatialRecordManager, metrics);
+        warmupStore = new WarmupStore(Path.of(WARMUP_FILE));
+        engine = new SpatialCacheEngine<>(spatialRecordManager, CachePolicy.DEFAULT, metrics, warmupStore);
     }
 
     @AfterEach
@@ -56,6 +60,7 @@ class SpatialCacheEngineTest {
         cacheManager.close();
         Files.deleteIfExists(Path.of(TEST_FILE));
         Files.deleteIfExists(Path.of(TEST_FILE + ".new"));
+        Files.deleteIfExists(Path.of(WARMUP_FILE));
     }
 
     // -------------------------------------------------------------------------
@@ -121,7 +126,7 @@ class SpatialCacheEngineTest {
                 .ttl(Duration.ofMillis(100))
                 .build();
         SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl, metrics);
+        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl, metrics, warmupStore);
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
@@ -214,7 +219,7 @@ class SpatialCacheEngineTest {
     void maxSize_초과시_evict() {
         CachePolicy limitedPolicy = CachePolicy.builder().maxSize(2).build();
         SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy, metrics);
+        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy, metrics, warmupStore);
 
         limitedEngine.putCache(geoHashIndex.toPageId(37.4979, 127.0276), List.of("A"));
         limitedEngine.putCache(geoHashIndex.toPageId(37.5665, 126.9780), List.of("B"));

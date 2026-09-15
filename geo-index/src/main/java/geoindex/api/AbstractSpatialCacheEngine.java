@@ -64,13 +64,18 @@ public abstract class AbstractSpatialCacheEngine<T> {
             byCode.putAll(loadByCodes(chunk));
         }
 
+        List<Map.Entry<Integer, List<T>>> prepared = new ArrayList<>();
         targets.forEach((pageId, codes) -> {
             List<T> data = codes.stream()
                     .map(byCode::get)
                     .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
-            spatialCacheEngine.putCache(pageId, data);
+                    .toList();
+            prepared.add(Map.entry(pageId, data));
         });
+        // 인기 오름차순 — 가장 인기 있는 것이 마지막에 들어가
+        // LRU 가 처음 축출할 때 가장 인기 없는 것부터 나간다
+        Collections.reverse(prepared);
+        prepared.forEach(e -> spatialCacheEngine.putCache(e.getKey(), e.getValue()));
     }
 
     public void shutdown() {

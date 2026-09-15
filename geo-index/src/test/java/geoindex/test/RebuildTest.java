@@ -5,6 +5,7 @@ import geoindex.api.SpatialCacheEngine;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;
 import geoindex.cache.CachePolicy;
+import geoindex.cache.WarmupStore;
 import geoindex.index.GeoHashIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.storage.DiskManager;
@@ -20,11 +21,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class RebuildTest {
 
     static final String TEST_FILE = "test_rebuild.db";
+    static final String WARMUP_FILE = "test_rebuild.store";
 
     @AfterEach
     void cleanup() throws Exception {
         Files.deleteIfExists(Path.of(TEST_FILE));
         Files.deleteIfExists(Path.of(TEST_FILE + ".new"));
+        Files.deleteIfExists(Path.of(WARMUP_FILE));
     }
 
     // -------------------------------------------------------------------------
@@ -106,7 +109,7 @@ class RebuildTest {
         DiskManager dm = new DiskManager(TEST_FILE, metrics);
         CacheManager cm = new CacheManager(dm, metrics);
         SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, CachePolicy.DEFAULT, metrics, new WarmupStore(Path.of(WARMUP_FILE)));
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         srm.put(37.4985, 127.0280, "B0002".getBytes());
@@ -134,7 +137,7 @@ class RebuildTest {
         DiskManager dm = new DiskManager(TEST_FILE, metrics);
         CacheManager cm = new CacheManager(dm, metrics);
         SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, CachePolicy.DEFAULT, metrics, new WarmupStore(Path.of(WARMUP_FILE)));
 
         srm.put(37.4979, 127.0276, "OLD_001".getBytes());
         cm.flush();
@@ -160,7 +163,7 @@ class RebuildTest {
         DiskManager dm = new DiskManager(TEST_FILE, metrics);
         CacheManager cm = new CacheManager(dm, metrics);
         SpatialRecordManager srm = new SpatialRecordManager(cm, new GeoHashIndex(), metrics);
-        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, metrics);
+        SpatialCacheEngine<String> engine = new SpatialCacheEngine<>(srm, CachePolicy.DEFAULT, metrics, new WarmupStore(Path.of(WARMUP_FILE)));
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         cm.flush();
