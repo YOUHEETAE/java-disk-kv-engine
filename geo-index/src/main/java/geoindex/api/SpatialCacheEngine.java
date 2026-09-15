@@ -39,34 +39,6 @@ public class SpatialCacheEngine<T> {
         spatialRecordManager.close();
     }
 
-    private List<T> getOrLoad(int pageId, List<String> codes, Function<List<String>, List<T>> loader) {
-        PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
-        if (result.isHit()) return result.getCached();
-
-        CompletableFuture<List<T>> future = new CompletableFuture<>();
-        CompletableFuture<List<T>> existing = pendingLoads.putIfAbsent(pageId, future);
-        if(existing != null) return  existing.join();
-        PageResult<T> recheck = pageCacheStore.getOrMiss(pageId, codes);
-        if (recheck.isHit()) {
-            future.complete(recheck.getCached());
-            pendingLoads.remove(pageId);
-            return recheck.getCached();
-        }
-        try{
-            List<T> data = loader.apply(codes);
-            pageCacheStore.put(pageId, data);
-            future.complete(data);
-            return data;
-
-        } catch (Exception e){
-            future.completeExceptionally(e);
-            throw e;
-        }finally {
-            pendingLoads.remove(pageId);
-        }
-
-    }
-
     public List<T> search (double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader) {
         Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
         
@@ -169,22 +141,6 @@ public class SpatialCacheEngine<T> {
         return result;
     }
 
-    // -------------------------------------------------------------------------
-    // search() — pageId 조회 + HIT/MISS 판단 위임
-    // -------------------------------------------------------------------------
-
-    public List<PageResult<T>> search(double lat, double lng, double radiusKm) {
-        Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
-        List<PageResult<T>> results = new ArrayList<>();
-
-        for (Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()) {
-            int pageId = entry.getKey();
-            List<String> codes = entry.getValue();
-            results.add(pageCacheStore.getOrMiss(pageId, codes));
-        }
-        return results;
-    }
-
     public void putCache(int pageId, List<T> data) {
         pageCacheStore.put(pageId, data);
     }
@@ -199,10 +155,6 @@ public class SpatialCacheEngine<T> {
         // clearCache 뒤에 올린다. 앞이면 "세대는 새것인데 캐시는 옛 값" 인 창이 생긴다.
         // 뒤면 그 창에 들어온 put 은 곧 비워지므로 무해하다.
         generation.incrementAndGet();
-    }
-
-    public CachePolicy getPolicy() {
-        return pageCacheStore.getPolicy();
     }
 
     public long getCacheSize() {
@@ -232,10 +184,6 @@ public class SpatialCacheEngine<T> {
     // -------------------------------------------------------------------------
     // warmup
     // -------------------------------------------------------------------------
-
-    public List<Integer> getWarmupCandidates(int n) {
-        return warmupStore.getTopPageIds(n);
-    }
 
     public Map<Integer, List<String>> getWarmupTargets(int n) {
         CachePolicy policy = pageCacheStore.getPolicy();

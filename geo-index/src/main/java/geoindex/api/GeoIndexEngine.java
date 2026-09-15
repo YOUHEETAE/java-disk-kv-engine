@@ -42,7 +42,7 @@ public class GeoIndexEngine {
             DiskManager diskManager = new DiskManager(dbFile, engineMetrics);
             CacheManager cacheManager = new CacheManager(diskManager, engineMetrics);
             SpatialRecordManager spatialRecordManager = new SpatialRecordManager(cacheManager, new GeoHashIndex(),  engineMetrics);
-            WarmupStore warmupStore = warmupFile != null ? new WarmupStore(Path.of(warmupFile)) : null;
+            WarmupStore warmupStore = new WarmupStore(Path.of(warmupFile));
             return new SpatialCacheEngine<>(spatialRecordManager, policy, engineMetrics, warmupStore);
         }
     }

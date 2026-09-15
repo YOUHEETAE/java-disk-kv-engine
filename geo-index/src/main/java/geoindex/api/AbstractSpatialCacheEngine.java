@@ -86,13 +86,4 @@ public abstract class AbstractSpatialCacheEngine<T> {
         return spatialCacheEngine.getMetrics();
     }
 
-    // -------------------------------------------------------------------------
-    // 유틸
-    // -------------------------------------------------------------------------
-
-    private double[] calcMBR(double lat, double lng, double radiusKm) {
-        double deltaLat = radiusKm / 110.0;
-        double deltaLng = radiusKm / (111.32 * Math.cos(Math.toRadians(lat)));
-        return new double[]{ lng - deltaLng, lng + deltaLng, lat - deltaLat, lat + deltaLat };
-    }
 }
