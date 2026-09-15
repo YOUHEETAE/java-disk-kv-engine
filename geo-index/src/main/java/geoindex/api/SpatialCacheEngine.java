@@ -9,6 +9,7 @@ import geoindex.metric.MetricsSnapshot;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -21,6 +22,11 @@ public class SpatialCacheEngine<T> {
     private final EngineMetrics engineMetrics;
     private final WarmupStore warmupStore;
     private final ConcurrentHashMap<Integer, CompletableFuture<List<T>>> pendingLoads = new ConcurrentHashMap<>();
+    /**
+     * rebuild 가 캐시를 비울 때마다 1 오른다. 비우기 전에 시작된 로딩이 뒤늦게 도착해
+     * 옛 인덱스의 코드로 읽은 값을 새 캐시에 넣는 것을 막는다.
+     */
+    private final AtomicInteger generation = new AtomicInteger();
 
     public SpatialCacheEngine(SpatialRecordManager spatialRecordManager, EngineMetrics engineMetrics) {
         this(spatialRecordManager, CachePolicy.DEFAULT, engineMetrics, null);
@@ -125,6 +131,7 @@ public class SpatialCacheEngine<T> {
 
     private void loadPages(PageLoadState<T> state, Function<List<String>, Map<String, T>> batchLoader) {
         if(!state.hasPageToLoad()) return;
+        int gen = generation.get();
 
         try {
             List<String> codesToLoad = state.getCodesToLoad();
@@ -136,7 +143,10 @@ public class SpatialCacheEngine<T> {
                         .filter(Objects::nonNull)
                         .collect(Collectors.toList());
 
-                putCache(pageId, pageData);
+                // 세대가 바뀌었으면 이 값은 틀린 게 아니라 낡은 것이다. 호출자와 대기자에게는
+                // 돌려주되 캐시에는 남기지 않는다. TTL 은 이 값이 얼마나 오래 남느냐를 정할 뿐
+                // 들어가는 것 자체를 막지 못한다 — 꺼져 있으면 다음 rebuild 까지, 켜져 있으면 TTL 만큼.
+                if(gen == generation.get()) putCache(pageId, pageData);
                 state.putReadyPage(pageId, pageData);
                 state.getMyFuture(pageId).complete(pageData);
             });
@@ -194,6 +204,10 @@ public class SpatialCacheEngine<T> {
     public void rebuild(Consumer<SpatialRecordManager> loader) {
         spatialRecordManager.rebuild(loader);    // 파일 재구축 + atomic rename
         pageCacheStore.clearCache();      // JVM 캐시 초기화
+
+        // clearCache 뒤에 올린다. 앞이면 "세대는 새것인데 캐시는 옛 값" 인 창이 생긴다.
+        // 뒤면 그 창에 들어온 put 은 곧 비워지므로 무해하다.
+        generation.incrementAndGet();
     }
 
     public CachePolicy getPolicy() {
@@ -243,5 +257,7 @@ public class SpatialCacheEngine<T> {
     public void persistWarmup() {
         warmupStore.saveHitCounts();
     }
+
+    public void recordWarmupFailure() { engineMetrics.incrementWarmupFailureCount(); }
 
 }

@@ -372,6 +372,45 @@ class SpatialCacheEngineTest {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // rebuild 가 로딩 중간에 끼면 — 비우기 전에 시작된 로딩이 비운 뒤에 도착한다.
+    // 결과는 돌려주되(틀린 게 아니라 낡은 것) 캐시에는 남기면 안 된다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void rebuild가_로딩_중간에_끼면_결과는_오되_캐시에는_남지_않는다() throws Exception {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+
+        CountDownLatch insideLoader = new CountDownLatch(1);
+        CountDownLatch releaseLoader = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<String>> inFlight = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                insideLoader.countDown();                                   // DB 조회 시작
+                try { releaseLoader.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                Map<String, String> m = new HashMap<>();
+                for (String c : codes) m.put(c, "v-" + c);
+                return m;
+            }));
+            insideLoader.await(3, TimeUnit.SECONDS);
+
+            engine.rebuild(srm -> srm.put(37.4979, 127.0276, "B0001".getBytes()));   // 로딩 도중 비운다
+            assertFalse(engine.isCached(pageId), "rebuild 직후 캐시는 비어 있다");
+
+            releaseLoader.countDown();                                      // 이제야 DB 결과가 도착한다
+            List<String> result = inFlight.get(3, TimeUnit.SECONDS);
+
+            assertEquals(List.of("v-B0001"), result, "낡았어도 결과는 돌려준다");
+            assertFalse(engine.isCached(pageId), "비운 뒤 도착한 로딩은 캐시에 남으면 안 된다");
+        } finally {
+            releaseLoader.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     void loader_1번_호출_검증() throws InterruptedException {
         spatialRecordManager.put( 33.4996, 126.5312 , "B0001".getBytes());

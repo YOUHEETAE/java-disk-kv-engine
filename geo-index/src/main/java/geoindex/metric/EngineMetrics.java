@@ -25,6 +25,7 @@ public class EngineMetrics {
     private final AtomicLong flushedPages  = new AtomicLong();
     private final AtomicLong rebuildCount  = new AtomicLong();
     private final AtomicLong totalRebuildMs = new AtomicLong();
+    private final AtomicLong warmupFailureCount = new AtomicLong();
 
     // increment
     public void incrementQueryCount()      { queryCount.incrementAndGet(); }
@@ -38,6 +39,7 @@ public class EngineMetrics {
     public void incrementFlushCount()      { flushCount.incrementAndGet(); }
     public void incrementRebuildCount()    { rebuildCount.incrementAndGet(); }
     public void addRebuildMs(long ms)      { totalRebuildMs.addAndGet(ms); }
+    public void incrementWarmupFailureCount() { warmupFailureCount.incrementAndGet(); }
     public void addIntervals(int count)    { totalIntervals.addAndGet(count); }
 
     public MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed, int usedPageCount) {
@@ -66,6 +68,7 @@ public class EngineMetrics {
                 flushedPages.get(),
                 rCount,
                 rCount > 0 ? totalRebuildMs.get() / rCount : 0,
+                warmupFailureCount.get(),
                 dirtyPages,
                 overflowPageUsed,
                 usedPageCount

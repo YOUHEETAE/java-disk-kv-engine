@@ -1,5 +1,6 @@
 package geoindex.api;
 
+import geoindex.exception.WarmupFailedException;
 import geoindex.metric.MetricsSnapshot;
 
 import java.nio.charset.StandardCharsets;
@@ -39,7 +40,15 @@ public abstract class AbstractSpatialCacheEngine<T> {
             supplier.accept((lat, lng, code) ->
                     srm.put(lat, lng, code.getBytes(StandardCharsets.UTF_8)))
         );
-        warmup();
+        try {
+            warmup();
+        } catch(RuntimeException e) {
+            // 재구축은 이미 끝났고 인덱스는 새것이다. 원래 예외를 그대로 올리면 호출자가 rebuild 실패로
+            // 오해해 멀쩡한 인덱스를 다시 만들 수 있다. 예열 실패임을 타입으로 구분해 준다.
+            // 무시할지는 호출자가 정한다 — 캐시가 빈 채 서비스해도 되는지는 엔진이 모른다.
+            spatialCacheEngine.recordWarmupFailure();
+            throw new WarmupFailedException(e);
+        }
     }
 
     public void warmup() {
