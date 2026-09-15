@@ -150,11 +150,7 @@ public class SpatialCacheEngine<T> {
     // -------------------------------------------------------------------------
     public void rebuild(Consumer<SpatialRecordManager> loader) {
         spatialRecordManager.rebuild(loader);    // 파일 재구축 + atomic rename
-        pageCacheStore.clearCache();      // JVM 캐시 초기화
-
-        // clearCache 뒤에 올린다. 앞이면 "세대는 새것인데 캐시는 옛 값" 인 창이 생긴다.
-        // 뒤면 그 창에 들어온 put 은 곧 비워지므로 무해하다.
-        generation.incrementAndGet();
+        clearCache();    // JVM 캐시 초기화
     }
 
     public long getCacheSize() {
@@ -166,6 +162,9 @@ public class SpatialCacheEngine<T> {
 
     public void clearCache() {
         pageCacheStore.clearCache();
+        // clearCache 뒤에 올린다. 앞이면 "세대는 새것인데 캐시는 옛 값" 인 창이 생긴다.
+        // 뒤면 그 창에 들어온 put 은 곧 비워지므로 무해하다.
+        generation.incrementAndGet();
     }
 
     // -------------------------------------------------------------------------

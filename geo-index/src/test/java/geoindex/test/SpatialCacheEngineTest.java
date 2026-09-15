@@ -424,6 +424,41 @@ class SpatialCacheEngineTest {
     }
 
     @Test
+    void clearCache가_로딩_중간에_끼어도_결과는_오되_캐시에는_남지_않는다() throws Exception {
+        // rebuild 만이 아니라 스프링이 직접 clearCache() 를 불러도 같은 보장이어야 한다.
+        // README 가 배치 주기에 clearCache() 를 부르라고 안내한다.
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+
+        CountDownLatch insideLoader = new CountDownLatch(1);
+        CountDownLatch releaseLoader = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<String>> inFlight = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                insideLoader.countDown();
+                try { releaseLoader.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                Map<String, String> m = new HashMap<>();
+                for (String c : codes) m.put(c, "v-" + c);
+                return m;
+            }));
+            insideLoader.await(3, TimeUnit.SECONDS);
+
+            engine.clearCache();                                            // rebuild 없이 비우기만
+
+            releaseLoader.countDown();
+            List<String> result = inFlight.get(3, TimeUnit.SECONDS);
+
+            assertEquals(List.of("v-B0001"), result, "낡았어도 결과는 돌려준다");
+            assertFalse(engine.isCached(pageId), "비운 뒤 도착한 로딩은 캐시에 남으면 안 된다");
+        } finally {
+            releaseLoader.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void loader_1번_호출_검증() throws InterruptedException {
         spatialRecordManager.put( 33.4996, 126.5312 , "B0001".getBytes());
         cacheManager.flush();
