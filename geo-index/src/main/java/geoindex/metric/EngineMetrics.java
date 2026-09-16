@@ -9,7 +9,6 @@ public class EngineMetrics {
     // Index
     private final AtomicLong queryCount     = new AtomicLong();
     private final AtomicLong totalPageIds   = new AtomicLong();
-    private final AtomicLong totalIntervals = new AtomicLong();
 
     // Cache
     private final AtomicLong pageHit    = new AtomicLong();
@@ -40,7 +39,6 @@ public class EngineMetrics {
     public void incrementRebuildCount()    { rebuildCount.incrementAndGet(); }
     public void addRebuildMs(long ms)      { totalRebuildMs.addAndGet(ms); }
     public void incrementWarmupFailureCount() { warmupFailureCount.incrementAndGet(); }
-    public void addIntervals(int count)    { totalIntervals.addAndGet(count); }
 
     public MetricsSnapshot snapshot(int cacheSize, int dirtyPages, int overflowPageUsed, int usedPageCount) {
         long qCount    = queryCount.get();
@@ -53,7 +51,6 @@ public class EngineMetrics {
                 // Index
                 qCount,
                 qCount > 0 ? (double) totalPageIds.get() / qCount : 0.0,
-                qCount > 0 ? (double) totalIntervals.get() / qCount : 0.0,
                 // Cache
                 hitCount,
                 missCount,

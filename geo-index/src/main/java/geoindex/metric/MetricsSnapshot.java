@@ -5,7 +5,6 @@ public class MetricsSnapshot {
     // Index
     public final long   queryCount;
     public final double avgPageIds;
-    public final double avgIntervals;
 
     // Cache
     public final long   pageHit;
@@ -29,7 +28,7 @@ public class MetricsSnapshot {
     public final int    overflowPageUsed;
 
     public MetricsSnapshot(
-            long queryCount, double avgPageIds, double avgIntervals,
+            long queryCount, double avgPageIds,
             long pageHit, long pageMiss, double pageHitRate, int cacheSize, long evictCount,
             long pageReadCount, long pageWriteCount,
             long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, long warmupFailureCount ,int dirtyPages,
@@ -37,7 +36,6 @@ public class MetricsSnapshot {
     ) {
         this.queryCount       = queryCount;
         this.avgPageIds       = avgPageIds;
-        this.avgIntervals     = avgIntervals;
         this.pageHit          = pageHit;
         this.pageMiss         = pageMiss;
         this.pageHitRate      = pageHitRate;

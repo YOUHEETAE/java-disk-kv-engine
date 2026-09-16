@@ -36,7 +36,7 @@ engine.getMetrics()  // 모든 레이어 카운터 정확히 집계됨
 
 **카운터 구성:**
 ```
-Index   : queryCount, totalPageIds, totalIntervals
+Index   : queryCount, totalPageIds
 Cache   : pageHit, pageMiss, evictCount
 Disk    : pageReadCount, pageWriteCount
 Storage : flushCount, flushedPages, rebuildCount, totalRebuildMs
@@ -55,7 +55,6 @@ void incrementFlushedPages()
 void incrementEvictCount()
 void incrementRebuildCount()
 void addPageIds(int count)
-void addIntervals(int count)
 void addRebuildMs(long ms)
 
 // SpatialCacheEngine에서만 호출
@@ -86,7 +85,6 @@ return engineMetrics.snapshot(
 // Index
 long   queryCount
 double avgPageIds      // totalPageIds / queryCount
-double avgIntervals    // totalIntervals / queryCount
 
 // Cache
 long   pageHit
