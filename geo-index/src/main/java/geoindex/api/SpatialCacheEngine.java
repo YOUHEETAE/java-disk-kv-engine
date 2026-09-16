@@ -186,8 +186,11 @@ public class SpatialCacheEngine<T> {
      * AbstractSpatialCacheEngine.rebuild 가 이어서 한다.
      */
     public void rebuild(Consumer<SpatialRecordManager> loader) {
+        long start = System.nanoTime();
         spatialRecordManager.rebuild(loader);    // 파일 재구축 + atomic rename
         clearCache();
+        engineMetrics.incrementRebuildCount();
+        engineMetrics.addRebuildMs((System.nanoTime() - start) / 1_000_000);
     }
 
     /**
