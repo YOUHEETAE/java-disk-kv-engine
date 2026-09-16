@@ -20,8 +20,6 @@ import java.util.List;
  *   원본은 MariaDB 에 있다. clearCache() 가 flush 없이 그냥 비우는 이유이고, 손상된 항목을
  *   예외 대신 MISS 로 처리해도 되는 이유다. Layer 1 의 CacheManager 가 dirty page 를
  *   유일한 사본으로 들고 있는 것과 정반대다.
- *
- * warmupStore 는 null 일 수 있다 (2-arg 생성자). 이 클래스는 그 경우를 방어한다.
  */
 public class PageCacheStore<T> {
     private final CachePolicy policy;
@@ -37,9 +35,6 @@ public class PageCacheStore<T> {
         this.engineMetrics = engineMetrics;
         this.warmupStore = warmupStore;
     }
-    public PageCacheStore(CachePolicy policy, EngineMetrics engineMetrics) {
-        this(policy, engineMetrics, null);
-    }
 
     /**
      * pageId 로 캐시를 판정한다. HIT 이면 데이터를, MISS 이면 넘겨받은 codes 를 그대로 돌려준다.
@@ -52,7 +47,8 @@ public class PageCacheStore<T> {
      */
     public synchronized PageResult<T> getOrMiss(int pageId, List<String> codes) {
         CacheEntry<T> cached = pageCache.get(pageId);
-        if(warmupStore != null) warmupStore.recordAccess(pageId);
+
+        warmupStore.recordAccess(pageId);
 
         if (cached != null && !cached.isExpired()) {
             engineMetrics.incrementPageHit();
@@ -64,6 +60,12 @@ public class PageCacheStore<T> {
         }
         engineMetrics.incrementPageMiss();
         return PageResult.miss(pageId, codes);
+    }
+
+    /** 판정만 한다 — 메트릭도 접근 기록도 올리지 않는다. 같은 요청의 double-check 용. */
+    public synchronized List<T> peekIfCached(int pageId) {
+        CacheEntry<T> cached = pageCache.get(pageId);
+        return (cached != null && !cached.isExpired()) ? cached.getData() : null;
     }
 
     /**

@@ -1,10 +1,10 @@
 package geoindex.test;
 
-import geoindex.api.PageResult;
 import geoindex.api.SpatialRecordManager;
 import geoindex.api.SpatialCacheEngine;
 import geoindex.buffer.CacheManager;
 import geoindex.cache.CachePolicy;
+import geoindex.cache.WarmupStore;
 import geoindex.index.GeoHashIndex;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
@@ -17,24 +17,48 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SpatialCacheEngineTest {
 
     static final String TEST_FILE = "test_cache_engine.db";
+    static final String WARMUP_FILE = "test_cache_engine.store";
+    WarmupStore warmupStore;
     EngineMetrics metrics;
     DiskManager diskManager;
     CacheManager cacheManager;
     GeoHashIndex geoHashIndex;
     SpatialRecordManager spatialRecordManager;
     SpatialCacheEngine<String> engine;
+
+    /**
+     * loader 호출 여부와 받은 코드를 기록한다. 판정만 돌려주던 3-arg search 가 사라진 뒤로
+     * HIT/MISS 는 "loader 가 불렸나" 로만 관측한다 — 운영 경로와 같은 창이다.
+     */
+    static class RecordingLoader implements Function<List<String>, Map<String, String>> {
+        int calls = 0;
+        final List<String> received = new java.util.ArrayList<>();
+        @Override public Map<String, String> apply(List<String> codes) {
+            calls++;
+            received.addAll(codes);
+            Map<String, String> m = new HashMap<>();
+            for (String c : codes) m.put(c, "v-" + c);
+            return m;
+        }
+    }
 
     @BeforeEach
     void setup() {
@@ -43,7 +67,8 @@ class SpatialCacheEngineTest {
         cacheManager = new CacheManager(diskManager, metrics);
         geoHashIndex = new GeoHashIndex();
         spatialRecordManager = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        engine = new SpatialCacheEngine<>(spatialRecordManager, metrics);
+        warmupStore = new WarmupStore(Path.of(WARMUP_FILE));
+        engine = new SpatialCacheEngine<>(spatialRecordManager, CachePolicy.DEFAULT, metrics, warmupStore);
     }
 
     @AfterEach
@@ -51,6 +76,7 @@ class SpatialCacheEngineTest {
         cacheManager.close();
         Files.deleteIfExists(Path.of(TEST_FILE));
         Files.deleteIfExists(Path.of(TEST_FILE + ".new"));
+        Files.deleteIfExists(Path.of(WARMUP_FILE));
     }
 
     // -------------------------------------------------------------------------
@@ -63,10 +89,11 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
+        RecordingLoader loader = new RecordingLoader();
+        engine.search(37.4979, 127.0276, 5.0, loader);
 
-        assertTrue(results.stream().anyMatch(r -> !r.isHit()));
-        System.out.println("MISS pageId 수: " + results.stream().filter(r -> !r.isHit()).count());
+        assertEquals(1, loader.calls, "빈 캐시에서 첫 요청은 MISS — loader 가 불린다");
+        assertTrue(loader.received.contains("B0001"));
     }
 
     @Test
@@ -75,19 +102,16 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // 첫 요청 → MISS
-        List<PageResult<String>> first = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(first.stream().anyMatch(r -> !r.isHit()));
+        // 첫 요청 → MISS → search 가 loader 결과를 캐시에 넣는다
+        RecordingLoader loader = new RecordingLoader();
+        List<String> first = engine.search(37.4979, 127.0276, 5.0, loader);
+        assertEquals(1, loader.calls);
+        assertEquals(List.of("v-B0001"), first);
 
-        // MISS → pageId 단위로 JVM에 저장
-        first.stream().filter(r -> !r.isHit()).forEach(r ->
-                engine.putCache(r.getPageId(), List.of("B0001"))
-        );
-
-        // 두 번째 요청 → HIT
-        List<PageResult<String>> second = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(second.stream().anyMatch(PageResult::isHit));
-        System.out.println("HIT pageId 수: " + second.stream().filter(PageResult::isHit).count());
+        // 두 번째 요청 → HIT → loader 가 안 불린다
+        List<String> second = engine.search(37.4979, 127.0276, 5.0, loader);
+        assertEquals(1, loader.calls, "HIT 이면 loader 가 불리지 않는다");
+        assertEquals(first, second);
     }
 
     @Test
@@ -97,13 +121,11 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
+        RecordingLoader loader = new RecordingLoader();
+        engine.search(37.4979, 127.0276, 5.0, loader);
 
-        results.stream().filter(r -> !r.isHit()).forEach(r -> {
-            assertNotNull(r.getCodes());
-            assertFalse(r.getCodes().isEmpty());
-            System.out.println("MISS pageId: " + r.getPageId() + " codes: " + r.getCodes());
-        });
+        assertTrue(loader.received.contains("B0001"), "MISS 페이지의 코드가 loader 에 전달돼야 한다");
+        assertTrue(loader.received.contains("B0002"));
     }
 
     // -------------------------------------------------------------------------
@@ -116,7 +138,7 @@ class SpatialCacheEngineTest {
                 .ttl(Duration.ofMillis(100))
                 .build();
         SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl, metrics);
+        SpatialCacheEngine<String> ttlEngine = new SpatialCacheEngine<>(srm, shortTtl, metrics, warmupStore);
 
         srm.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
@@ -130,10 +152,10 @@ class SpatialCacheEngineTest {
         // TTL 만료 대기
         Thread.sleep(150);
 
-        // 만료 후 → MISS
-        List<PageResult<String>> after = ttlEngine.search(37.4979, 127.0276, 5.0);
-        assertTrue(after.stream().anyMatch(r -> !r.isHit()), "TTL 만료 후 MISS여야 한다");
-        System.out.println("TTL 만료 후 MISS 확인 ✅");
+        // 만료 후 → MISS → loader 가 불린다
+        RecordingLoader loader = new RecordingLoader();
+        ttlEngine.search(37.4979, 127.0276, 5.0, loader);
+        assertEquals(1, loader.calls, "TTL 만료 후 MISS여야 한다");
     }
 
     @Test
@@ -164,9 +186,9 @@ class SpatialCacheEngineTest {
         engine.clearCache();
         assertEquals(0, engine.getCacheSize());
 
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(results.stream().noneMatch(PageResult::isHit), "clearCache 후 전부 MISS여야 한다");
-        System.out.println("clearCache 후 전체 MISS 확인 ✅");
+        RecordingLoader loader = new RecordingLoader();
+        engine.search(37.4979, 127.0276, 5.0, loader);
+        assertEquals(1, loader.calls, "clearCache 후 전부 MISS여야 한다");
     }
 
     // -------------------------------------------------------------------------
@@ -188,17 +210,13 @@ class SpatialCacheEngineTest {
             srm.put(37.4979, 127.0276, "NEW_002".getBytes());
         });
 
-        // JVM 캐시 비워짐 → MISS
-        List<PageResult<String>> results = engine.search(37.4979, 127.0276, 5.0);
-        assertTrue(results.stream().anyMatch(r -> !r.isHit()), "rebuild 후 JVM 캐시 비워져야 한다");
-
-        // MISS codes에 새 데이터 포함
-        results.stream().filter(r -> !r.isHit()).forEach(r -> {
-            assertTrue(r.getCodes().contains("NEW_001") || r.getCodes().contains("NEW_002"),
-                    "새 데이터가 파일에 있어야 한다");
-            assertFalse(r.getCodes().contains("OLD_001"), "기존 데이터는 없어야 한다");
-        });
-        System.out.println("rebuild 후 새 데이터 파일 조회 확인 ✅");
+        // JVM 캐시 비워짐 → MISS → loader 가 새 인덱스의 코드를 받는다
+        RecordingLoader loader = new RecordingLoader();
+        engine.search(37.4979, 127.0276, 5.0, loader);
+        assertEquals(1, loader.calls, "rebuild 후 JVM 캐시 비워져야 한다");
+        assertTrue(loader.received.contains("NEW_001") && loader.received.contains("NEW_002"),
+                "새 데이터가 파일에 있어야 한다");
+        assertFalse(loader.received.contains("OLD_001"), "기존 데이터는 없어야 한다");
     }
 
     // -------------------------------------------------------------------------
@@ -209,7 +227,7 @@ class SpatialCacheEngineTest {
     void maxSize_초과시_evict() {
         CachePolicy limitedPolicy = CachePolicy.builder().maxSize(2).build();
         SpatialRecordManager srm = new SpatialRecordManager(cacheManager, geoHashIndex, metrics);
-        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy, metrics);
+        SpatialCacheEngine<String> limitedEngine = new SpatialCacheEngine<>(srm, limitedPolicy, metrics, warmupStore);
 
         limitedEngine.putCache(geoHashIndex.toPageId(37.4979, 127.0276), List.of("A"));
         limitedEngine.putCache(geoHashIndex.toPageId(37.5665, 126.9780), List.of("B"));
@@ -254,11 +272,10 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        // MISS → putCache → HIT 흐름
-        List<PageResult<String>> first = engine.search(37.4979, 127.0276, 5.0);
-        first.stream().filter(r -> !r.isHit())
-                .forEach(r -> engine.putCache(r.getPageId(), List.of("B0001", "B0002")));
-        engine.search(37.4979, 127.0276, 5.0); // HIT
+        // MISS → HIT 흐름
+        RecordingLoader loader = new RecordingLoader();
+        engine.search(37.4979, 127.0276, 5.0, loader);   // MISS
+        engine.search(37.4979, 127.0276, 5.0, loader);   // HIT
 
         // 메트릭 출력
         MetricsSnapshot metricsSnapshot = engine.getMetrics();
@@ -296,6 +313,151 @@ class SpatialCacheEngineTest {
                 metricsSnapshot.overflowPageUsed
         );
     }
+    // -------------------------------------------------------------------------
+    // search 의 기본 계약 — 미스로 로드한 데이터가 결과에 들어 있어야 한다
+    // 기존 테스트는 loader 호출 횟수만 셌다. 그래서 결과가 통째로 빠져도 통과했다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void MISS로_로드한_데이터가_결과에_들어있다() {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        spatialRecordManager.put(37.4979, 127.0276, "B0002".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        List<String> result = engine.search(37.4979, 127.0276, 1.0, codes -> {
+            Map<String, String> m = new HashMap<>();
+            for (String c : codes) m.put(c, "v-" + c);
+            return m;
+        });
+
+        assertEquals(2, result.size(), "미스로 로드한 페이지의 값이 결과에서 빠지면 안 된다");
+        assertTrue(result.contains("v-B0001"));
+        assertTrue(result.contains("v-B0002"));
+    }
+
+    // -------------------------------------------------------------------------
+    // loader 가 Error 를 던지면 — catch(Exception) 을 건너뛴다.
+    // 승자 스레드는 Error 로 죽지만, 그 future 를 쥔 대기 스레드는 finally 가 풀어줘야 한다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void loader가_Error를_던져도_대기_스레드는_깨어난다() throws Exception {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+
+        CountDownLatch winnerInsideLoader = new CountDownLatch(1);   // 승자가 loader 안에 들어왔다
+        CountDownLatch releaseWinner      = new CountDownLatch(1);   // 승자를 놓아준다 → Error 를 던진다
+        AtomicBoolean waiterLoaderCalled  = new AtomicBoolean(false);
+        AtomicReference<Throwable> waiterOutcome = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> winner = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                winnerInsideLoader.countDown();
+                try { releaseWinner.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                throw new StackOverflowError("simulated");             // Exception 이 아니다
+            }));
+            winnerInsideLoader.await(3, TimeUnit.SECONDS);
+
+            Future<?> waiter = pool.submit(() -> {
+                try {
+                    engine.search(37.4979, 127.0276, 1.0, codes -> {
+                        waiterLoaderCalled.set(true);                  // 여기 오면 안 된다 — 승자의 future 를 기다려야 한다
+                        return Map.of();
+                    });
+                } catch (Throwable t) {
+                    waiterOutcome.set(t);
+                }
+            });
+            Thread.sleep(200);                                         // 대기자가 join() 에 도달할 시간
+            releaseWinner.countDown();
+
+            assertThrows(Exception.class, () -> winner.get(3, TimeUnit.SECONDS), "승자는 Error 로 끝난다");
+            waiter.get(3, TimeUnit.SECONDS);                           // 여기서 TimeoutException 이면 영구 대기다
+
+            assertFalse(waiterLoaderCalled.get(), "대기자는 직접 로드하지 않고 승자의 future 를 기다렸어야 한다");
+            assertNotNull(waiterOutcome.get(), "대기자는 예외로 깨어나야 한다 — 빈 결과로 넘어가면 안 된다");
+        } finally {
+            releaseWinner.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // rebuild 가 로딩 중간에 끼면 — 비우기 전에 시작된 로딩이 비운 뒤에 도착한다.
+    // 결과는 돌려주되(틀린 게 아니라 낡은 것) 캐시에는 남기면 안 된다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void rebuild가_로딩_중간에_끼면_결과는_오되_캐시에는_남지_않는다() throws Exception {
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+
+        CountDownLatch insideLoader = new CountDownLatch(1);
+        CountDownLatch releaseLoader = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<String>> inFlight = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                insideLoader.countDown();                                   // DB 조회 시작
+                try { releaseLoader.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                Map<String, String> m = new HashMap<>();
+                for (String c : codes) m.put(c, "v-" + c);
+                return m;
+            }));
+            insideLoader.await(3, TimeUnit.SECONDS);
+
+            engine.rebuild(srm -> srm.put(37.4979, 127.0276, "B0001".getBytes()));   // 로딩 도중 비운다
+            assertFalse(engine.isCached(pageId), "rebuild 직후 캐시는 비어 있다");
+
+            releaseLoader.countDown();                                      // 이제야 DB 결과가 도착한다
+            List<String> result = inFlight.get(3, TimeUnit.SECONDS);
+
+            assertEquals(List.of("v-B0001"), result, "낡았어도 결과는 돌려준다");
+            assertFalse(engine.isCached(pageId), "비운 뒤 도착한 로딩은 캐시에 남으면 안 된다");
+        } finally {
+            releaseLoader.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void clearCache가_로딩_중간에_끼어도_결과는_오되_캐시에는_남지_않는다() throws Exception {
+        // rebuild 만이 아니라 스프링이 직접 clearCache() 를 불러도 같은 보장이어야 한다.
+        // README 가 배치 주기에 clearCache() 를 부르라고 안내한다.
+        spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+
+        CountDownLatch insideLoader = new CountDownLatch(1);
+        CountDownLatch releaseLoader = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<String>> inFlight = pool.submit(() -> engine.search(37.4979, 127.0276, 1.0, codes -> {
+                insideLoader.countDown();
+                try { releaseLoader.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                Map<String, String> m = new HashMap<>();
+                for (String c : codes) m.put(c, "v-" + c);
+                return m;
+            }));
+            insideLoader.await(3, TimeUnit.SECONDS);
+
+            engine.clearCache();                                            // rebuild 없이 비우기만
+
+            releaseLoader.countDown();
+            List<String> result = inFlight.get(3, TimeUnit.SECONDS);
+
+            assertEquals(List.of("v-B0001"), result, "낡았어도 결과는 돌려준다");
+            assertFalse(engine.isCached(pageId), "비운 뒤 도착한 로딩은 캐시에 남으면 안 된다");
+        } finally {
+            releaseLoader.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     void loader_1번_호출_검증() throws InterruptedException {
         spatialRecordManager.put( 33.4996, 126.5312 , "B0001".getBytes());
@@ -306,7 +468,6 @@ class SpatialCacheEngineTest {
         int treadCount = 100;
         ExecutorService executorService = Executors.newFixedThreadPool(treadCount);
         CountDownLatch countDownLatch = new CountDownLatch(treadCount);
-        int pageCount = engine.search(33.4996, 126.5312 , 5.0).size();
         for (int i = 0; i < treadCount; i++) {
             executorService.submit(() -> {
                 engine.search(33.4996, 126.5312, 5.0, codes -> {
@@ -319,7 +480,7 @@ class SpatialCacheEngineTest {
         countDownLatch.await();
         executorService.shutdown();
 
-        assertEquals(pageCount, loaderCallCount.get());
+        assertEquals(1, loaderCallCount.get(), "100 스레드가 같은 페이지를 미스해도 loader 는 한 번 — pendingLoads");
     }
     @Test
     void exception_스레드_전파() throws InterruptedException {

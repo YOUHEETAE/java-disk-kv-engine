@@ -3,8 +3,15 @@ package geoindex.test;
 import geoindex.api.PageResult;
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.cache.WarmupStore;
 import geoindex.metric.EngineMetrics;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -14,9 +21,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class PageCacheStoreTest {
 
+    static final String WARMUP_FILE = "test_page_cache_store.store";
+    WarmupStore warmupStore;
+
+    @BeforeEach
+    void setup() { warmupStore = new WarmupStore(Path.of(WARMUP_FILE)); }
+
+    @AfterEach
+    void cleanup() throws IOException { Files.deleteIfExists(Path.of(WARMUP_FILE)); }
+
     @Test
     void put_후_HIT() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), null);
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         store.put(100, List.of("H001", "H002", "H003"));
 
@@ -28,7 +44,7 @@ class PageCacheStoreTest {
 
     @Test
     void 없는_pageId_MISS() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         PageResult<String> result = store.getOrMiss(999, List.of("H001"));
         assertFalse(result.isHit());
@@ -38,7 +54,7 @@ class PageCacheStoreTest {
 
     @Test
     void put_덮어쓰기_중복없음() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         List<String> data = List.of("H001", "H002", "H003");
         store.put(100, data);
@@ -52,7 +68,7 @@ class PageCacheStoreTest {
 
     @Test
     void 동시_put_중복없음() throws InterruptedException {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         List<String> data = List.of("H001", "H002", "H003");
 
@@ -71,7 +87,7 @@ class PageCacheStoreTest {
 
     @Test
     void clearCache_후_MISS() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         store.put(100, List.of("H001", "H002"));
         store.put(200, List.of("H003", "H004"));
@@ -89,7 +105,7 @@ class PageCacheStoreTest {
 
     @Test
     void 넘긴_리스트를_나중에_고쳐도_캐시는_그대로다() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         List<String> data = new ArrayList<>(List.of("H001", "H002"));
         store.put(100, data);
@@ -102,7 +118,7 @@ class PageCacheStoreTest {
 
     @Test
     void 돌려받은_리스트는_고칠_수_없다() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
         store.put(100, new ArrayList<>(List.of("H001", "H002")));   // 가변으로 넣어도
 
         List<String> cached = store.getOrMiss(100, List.of()).getCached();
@@ -115,7 +131,7 @@ class PageCacheStoreTest {
 
     @Test
     void null_원소는_저장_시점에_거부한다() {
-        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics());
+        PageCacheStore<String> store = new PageCacheStore<>(CachePolicy.DEFAULT, new EngineMetrics(), warmupStore);
 
         // 조용히 저장했다가 나중에 읽는 쪽에서 터지는 것보다, 넣는 순간 터지는 편이 낫다
         assertThrows(NullPointerException.class,
@@ -132,7 +148,7 @@ class PageCacheStoreTest {
     void 꽉_찼을_때_있는_키를_다시_넣으면_축출하지_않는다() {
         EngineMetrics metrics = new EngineMetrics();
         CachePolicy twoSlots = CachePolicy.builder().maxSize(2).build();
-        PageCacheStore<String> store = new PageCacheStore<>(twoSlots, metrics);
+        PageCacheStore<String> store = new PageCacheStore<>(twoSlots, metrics, warmupStore);
 
         store.put(1, List.of("A"));
         store.put(2, List.of("B"));
@@ -149,7 +165,7 @@ class PageCacheStoreTest {
     void 꽉_찼을_때_새_키가_오면_가장_오래_안_쓴_것을_축출한다() {
         EngineMetrics metrics = new EngineMetrics();
         CachePolicy twoSlots = CachePolicy.builder().maxSize(2).build();
-        PageCacheStore<String> store = new PageCacheStore<>(twoSlots, metrics);
+        PageCacheStore<String> store = new PageCacheStore<>(twoSlots, metrics, warmupStore);
 
         store.put(1, List.of("A"));
         store.put(2, List.of("B"));

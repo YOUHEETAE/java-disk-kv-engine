@@ -387,7 +387,8 @@ mvn install
 `GeoIndexEngine.builder()`가 내부 7개 컴포넌트(EngineMetrics, DiskManager, CacheManager, GeoHashIndex, SpatialRecordManager, WarmupStore, SpatialCacheEngine) 조립을 대신한다.
 
 빈 구성 시 주의사항:
-- **`destroyMethod = "close"` 필수**. Spring 종료 시 dirty page flush + 파일 닫음 + warmup hit count 저장
+- **`destroyMethod = "close"` 필수**. Spring 종료 시 dirty page flush + 파일 닫음
+- **warmup hit count 저장은 `close()`가 하지 않는다**. `@PreDestroy`에서 `shutdown()`을 따로 불러야 한다 (5단계 참고)
 - **`warmupFile`은 필수**. 누락 시 `IllegalStateException`
 - 동일 타입 빈이 여러 개이므로 **`@Qualifier` 필수**
 
@@ -416,12 +417,11 @@ public class GeoIndexConfig {
 ### 4단계: application.properties
 
 ```properties
-# 워밍업 대상 pageId Top N (히트 횟수 기준 핫스팟 페이지)
-cache.warmup.size=3000
-
-# CachePolicy 커스터마이징 (선택 — 기본값: TTL 비활성화, 크기 무제한)
-# cache.ttl.days=0     # 0 = 비활성화. 배치 주기에 clearCache() 호출로 대신
-# cache.max-size=-1    # -1 = 무제한
+# CachePolicy 커스터마이징 (선택 — 기본값: TTL 비활성화, 크기 무제한, 예열 3000)
+# 셋 다 CachePolicy.builder() 로 넘긴다
+# cache.ttl.days=0       # 0 = 비활성화. 배치 주기에 clearCache() 호출로 대신
+# cache.max-size=-1      # -1 = 무제한
+# cache.warmup.size=3000 # 재시작 때 미리 채울 pageId 수. -1 = 기록 전부. maxSize 가 켜져 있으면 그 이하로 잘린다
 ```
 
 ### 5단계: 서비스 클래스
@@ -489,9 +489,9 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
 
 **부모가 제공하는 것:**
 - `search(lat, lng, radiusKm)` — MISS 시 loadByCodes 자동 호출 → 캐시 저장 → 반환
-- `warmup()` — WarmupStore Top N pageId → DB IN 쿼리 청크 분할 → putCache
-- `rebuild(Consumer<IndexLoader>)` — atomic rename + JVM 캐시 초기화 + warmup 재실행
-- `shutdown()` — `persistWarmup()` 호출
+- `warmup()` — 정책이 정한 개수만큼 Top N pageId → DB IN 쿼리 청크 분할 → 인기 오름차순으로 putCache
+- `rebuild(Consumer<IndexLoader>)` — atomic rename + JVM 캐시 초기화 + warmup. 예열이 실패하면 `WarmupFailedException` (재구축은 이미 끝났다)
+- `shutdown()` — `saveWarmup()` 호출
 - `getMetrics()` — 전 레이어 메트릭 스냅샷
 
 ### 6단계: Prometheus / Grafana 연동 (선택)
@@ -540,12 +540,12 @@ public class GeoIndexMetricsExporter {
 
 | 메서드 | 설명 |
 |--------|------|
-| `search(lat, lng, radiusKm, batchLoader)` | 반경 검색. MISS codes → 배치 DB 조회 → 캐시 저장 → 결과 반환 **(권장)** |
-| `search(lat, lng, radiusKm)` | 반경 검색. HIT/MISS 판단만, DB 조회는 호출자 책임 |
-| `putCache(pageId, data)` | MISS 후 DB 결과를 pageId 단위로 JVM 캐시 저장 |
-| `rebuild(loader)` | 전체 재색인. atomic rename으로 서비스 중단 없음. 완료 후 JVM 캐시 초기화 |
-| `getWarmupTargets(n)` | 히트 횟수 기준 Top N pageId와 소속 codes 반환 (워밍업용) |
-| `persistWarmup()` | 히트 카운트 디스크 저장. `@PreDestroy`에서 호출 |
+| `search(lat, lng, radiusKm, batchLoader)` | 반경 검색. MISS codes → 배치 DB 조회 → 캐시 저장 → 결과 반환. 같은 페이지를 동시에 미스해도 DB는 한 번 |
+| `putCache(pageId, data)` | 예열이 DB 결과를 넣는 통로 |
+| `rebuild(loader)` | 전체 재색인. atomic rename으로 서비스 중단 없음. 완료 후 `clearCache()` |
+| `clearCache()` | JVM 캐시 비우기 + 세대 교체. 비우기 전에 시작된 로딩이 늦게 도착해도 캐시에 들어가지 않는다 |
+| `getWarmupTargets()` | 정책이 정한 개수만큼 Top N pageId와 소속 codes. 인기 내림차순 |
+| `saveWarmup()` | 히트 카운트 디스크 저장. `shutdown()`이 부른다 |
 | `getMetrics()` | 전 레이어 메트릭 스냅샷 반환 (queryCount, hitRate, pageReadCount 등) |
 
 위 성능 수치는 이 연동 환경에서 실제 한국 병원 데이터 79,081건으로 측정한 결과다.
@@ -728,7 +728,7 @@ geo-index/
     - persist() / load() — 히트 카운트 디스크 영속 (재시작 후 히스토리 복원)
     - getTopPageIds(n) — 히트 횟수 내림차순 Top N 반환
     - PageCacheStore 연동 — getOrMiss() 시 recordAccess() 호출
-    - SpatialCacheEngine.getWarmupCandidates() / getWarmupTargets() / persistWarmup() — Spring 연동 API
+    - SpatialCacheEngine.getWarmupTargets() / saveWarmup() — Spring 연동 API
     - Spring @PostConstruct 비동기 워밍업 / @PreDestroy persist 흐름 설계
     - IN 쿼리 청크(1000건) 분할로 DB 연결 타임아웃 방지
 ✅ Phase 16: usedPageCount 메트릭 추가

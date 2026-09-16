@@ -24,15 +24,19 @@ pageId 단위 JVM 캐시 인프라 — Spring 없이 순수 Java 제네릭으로
 ### CachePolicy
 
 ```java
-CachePolicy.DEFAULT           // TTL_DISABLE + maxSize 무제한
+CachePolicy.DEFAULT           // TTL_DISABLE + maxSize 무제한 + warmupSize 3000
 CachePolicy.builder()
     .ttl(Duration.ofDays(7))
     .maxSize(5000)
+    .warmupSize(500)          // -1 (WARMUP_ALL) 이면 기록 전부
     .build()
 ```
 
 TTL 비활성화(기본): 배치 업데이트 시 rebuild()로 명시적 초기화
 TTL 활성화: Spring @Value로 주입 가능 (`cache.ttl.days=7`)
+warmupSize: 재시작 때 미리 채울 pageId 수. 기본 3000. maxSize 가 켜져 있으면 그 이하로 한 번 더 잘린다 —
+캐시에 못 들어갈 것을 DB 에서 가져올 이유가 없다. UNLIMITED 와 WARMUP_ALL 은 값이 같은 -1 이지만
+뜻이 다르다(상한 없음 / 전부).
 
 ---
 
@@ -55,13 +59,17 @@ pageId 단위 LRU 캐시 인프라.
 TTL 만료 체크, maxSize 초과 시 LRU evict, clearCache를 담당합니다.
 
 ```java
-PageResult<T> getOrMiss(int pageId, List<String> codes)
+PageResult<T> getOrMiss(int pageId, List<String> codes)   // 판정 + 집계 (메트릭 · 접근 기록)
+List<T> peekIfCached(int pageId)                          // 판정만 — 같은 요청의 double-check 용
 void put(int pageId, List<T> data)
 void clearCache()
 long getCacheSize()
 boolean isCached(int pageId)
 CachePolicy getPolicy()
 ```
+
+`peekIfCached` 가 따로 있는 이유: `SpatialCacheEngine` 의 double-check 가 `getOrMiss` 를 다시 부르면 미스 한 번이
+메트릭에 두 번, 접근 기록에 두 번 잡힌다. 같은 요청의 두 번째 판정은 새 접근이 아니다.
 
 **getOrMiss(pageId, codes):**
 ```
@@ -252,12 +260,13 @@ rebuild 후 hitCounts 초기화 안 함 → 과거 히스토리가 워밍업 핵
 **워밍업 흐름:**
 ```
 서버 시작 @PostConstruct → AbstractSpatialCacheEngine.warmup()
-  → spatialCacheEngine.getWarmupTargets(warmupSize)   // Top N pageId → 각각의 코드 목록
+  → spatialCacheEngine.getWarmupTargets()             // 정책이 정한 개수만큼 Top N pageId → 코드 목록, 인기 내림차순
   → loadByCodes(chunk)  ×  (코드 수 / 1000)            // 서비스가 구현한 DB 조회, IN 절 청크
-  → spatialCacheEngine.putCache(pageId, data)          // 페이지별로 다시 나눠 적재
+  → spatialCacheEngine.putCache(pageId, data)          // 페이지별로 나눠, 인기 오름차순으로 적재
+                                                        //   LRU 는 먼저 넣은 것부터 버리므로 가장 인기 있는 것을 마지막에
 
 서버 종료 @PreDestroy → shutdown()
-  → spatialCacheEngine.persistWarmup()                 // → WarmupStore.saveHitCounts()
+  → spatialCacheEngine.saveWarmup()                    // → WarmupStore.saveHitCounts()
 ```
 
 **Thread-safety:**

@@ -386,7 +386,8 @@ mvn install
 `GeoIndexEngine.builder()` handles assembly of all 7 internal components (EngineMetrics, DiskManager, CacheManager, GeoHashIndex, SpatialRecordManager, WarmupStore, SpatialCacheEngine) in one line.
 
 Key notes:
-- **`destroyMethod = "close"` is required** — flushes dirty pages, closes files, and persists warmup hit counts on Spring shutdown
+- **`destroyMethod = "close"` is required** — flushes dirty pages and closes files on Spring shutdown
+- **`close()` does not persist warmup hit counts** — call `shutdown()` from `@PreDestroy` separately (see step 5)
 - **`warmupFile` is required** — omitting it throws `IllegalStateException`
 - Multiple beans of the same type require **`@Qualifier`**
 
@@ -415,12 +416,11 @@ public class GeoIndexConfig {
 ### Step 4: application.properties
 
 ```properties
-# Top N pageIds to warm up (hotspot pages by hit count)
-cache.warmup.size=3000
-
-# CachePolicy customization (optional — defaults: TTL disabled, size unlimited)
-# cache.ttl.days=0     # 0 = disabled. Use clearCache() on batch cycle instead
-# cache.max-size=-1    # -1 = unlimited
+# CachePolicy customization (optional — defaults: TTL disabled, size unlimited, warmup 3000)
+# All three go through CachePolicy.builder()
+# cache.ttl.days=0       # 0 = disabled. Use clearCache() on batch cycle instead
+# cache.max-size=-1      # -1 = unlimited
+# cache.warmup.size=3000 # pages to pre-fill on restart. -1 = everything recorded. Capped by maxSize when set
 ```
 
 ### Step 5: Service Class
@@ -488,9 +488,9 @@ public class PlaceSpatialCacheService extends AbstractSpatialCacheEngine<PlaceDt
 
 **What the parent provides:**
 - `search(lat, lng, radiusKm)` — auto-calls loadByCodes on MISS → stores in cache → returns results
-- `warmup()` — WarmupStore Top N pageIds → chunked DB IN queries → putCache
-- `rebuild(Consumer<IndexLoader>)` — atomic rename + clears JVM cache + reruns warmup
-- `shutdown()` — calls `persistWarmup()`
+- `warmup()` — as many Top N pageIds as the policy allows → chunked DB IN queries → putCache in ascending popularity
+- `rebuild(Consumer<IndexLoader>)` — atomic rename + clears JVM cache + warmup. If warmup fails, throws `WarmupFailedException` (the rebuild itself already succeeded)
+- `shutdown()` — calls `saveWarmup()`
 - `getMetrics()` — metrics snapshot across all layers
 
 ### Step 6: Prometheus / Grafana Integration (Optional)
@@ -537,12 +537,12 @@ Use directly when bypassing `AbstractSpatialCacheEngine` for fine-grained contro
 
 | Method | Purpose |
 |--------|---------|
-| `search(lat, lng, radiusKm, batchLoader)` | Radius search — batch DB query on MISS → cache → return **(recommended)** |
-| `search(lat, lng, radiusKm)` | Radius search — HIT/MISS only, DB query is caller's responsibility |
-| `putCache(pageId, data)` | Store DB result in JVM cache at pageId level after MISS |
-| `rebuild(loader)` | Full re-index via atomic rename — no service interruption, clears JVM cache on complete |
-| `getWarmupTargets(n)` | Return Top N pageIds + codes by hit count (for warmup) |
-| `persistWarmup()` | Save hit counts to disk — call from `@PreDestroy` |
+| `search(lat, lng, radiusKm, batchLoader)` | Radius search — batch DB query on MISS → cache → return. Concurrent misses on the same page hit the DB once |
+| `putCache(pageId, data)` | How warmup stores DB results |
+| `rebuild(loader)` | Full re-index via atomic rename — no service interruption, then `clearCache()` |
+| `clearCache()` | Clear JVM cache + bump generation. A load that started before the clear cannot land in the cache afterwards |
+| `getWarmupTargets()` | Top N pageIds + codes, as many as the policy allows. Descending popularity |
+| `saveWarmup()` | Save hit counts to disk — `shutdown()` calls it |
 | `getMetrics()` | Get metrics snapshot across all layers (queryCount, hitRate, pageReadCount, etc.) |
 
 All performance figures above were measured against this integration using 79,081 real Korean hospital records.

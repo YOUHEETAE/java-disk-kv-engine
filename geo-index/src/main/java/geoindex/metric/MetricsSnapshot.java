@@ -23,6 +23,7 @@ public class MetricsSnapshot {
     public final long   flushCount;
     public final long   flushedPages;
     public final long   rebuildCount;
+    public final long   warmupFailureCount;
     public final long   avgRebuildMs;
     public final int    dirtyPages;
     public final int    overflowPageUsed;
@@ -31,7 +32,7 @@ public class MetricsSnapshot {
             long queryCount, double avgPageIds, double avgIntervals,
             long pageHit, long pageMiss, double pageHitRate, int cacheSize, long evictCount,
             long pageReadCount, long pageWriteCount,
-            long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, int dirtyPages,
+            long flushCount, long flushedPages, long rebuildCount, long avgRebuildMs, long warmupFailureCount ,int dirtyPages,
             int overflowPageUsed, int usedPageCount
     ) {
         this.queryCount       = queryCount;
@@ -48,6 +49,7 @@ public class MetricsSnapshot {
         this.flushedPages     = flushedPages;
         this.rebuildCount     = rebuildCount;
         this.avgRebuildMs     = avgRebuildMs;
+        this.warmupFailureCount = warmupFailureCount;
         this.dirtyPages       = dirtyPages;
         this.overflowPageUsed = overflowPageUsed;
         this.usedPageCount = usedPageCount;
