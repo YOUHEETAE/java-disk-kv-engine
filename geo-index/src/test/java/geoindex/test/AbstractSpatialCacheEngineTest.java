@@ -99,7 +99,7 @@ class AbstractSpatialCacheEngineTest {
         assertFalse(engine.isCached(pageId), "예열이 안 됐으니 캐시는 비어 있다");
 
         // 관측된다
-        assertEquals(1, service.getMetrics().warmupFailureCount, "예열 실패는 메트릭으로 남아야 한다");
+        assertEquals(1, service.getMetrics().storage().warmupFailureCount(), "예열 실패는 메트릭으로 남아야 한다");
     }
 
     // -------------------------------------------------------------------------
@@ -203,6 +203,6 @@ class AbstractSpatialCacheEngineTest {
         assertDoesNotThrow(() -> service.rebuild(loader -> loader.put(37.4979, 127.0276, "NEW")));
 
         assertTrue(engine.isCached(pageId), "예열이 캐시를 채웠어야 한다");
-        assertEquals(0, service.getMetrics().warmupFailureCount);
+        assertEquals(0, service.getMetrics().storage().warmupFailureCount());
     }
 }

@@ -157,7 +157,7 @@ class PageCacheStoreTest {
         assertEquals(2, store.getCacheSize());
         assertTrue(store.isCached(1), "교체된 키는 남아 있어야 한다");
         assertTrue(store.isCached(2), "교체 때문에 다른 키가 밀려나면 안 된다");
-        assertEquals(0, metrics.snapshot(0, 0, 0, 0).evictCount, "교체는 축출이 아니다");
+        assertEquals(0, metrics.snapshot(0, 0, 0, 0).cache().evictCount(), "교체는 축출이 아니다");
         System.out.println("교체는 축출을 발동하지 않음 ✅");
     }
 
@@ -176,7 +176,7 @@ class PageCacheStoreTest {
         assertTrue(store.isCached(1));
         assertFalse(store.isCached(2), "가장 오래 안 쓴 2 가 나가야 한다");
         assertTrue(store.isCached(3));
-        assertEquals(1, metrics.snapshot(0, 0, 0, 0).evictCount);
+        assertEquals(1, metrics.snapshot(0, 0, 0, 0).cache().evictCount());
         System.out.println("새 키 → LRU 축출 ✅");
     }
 }

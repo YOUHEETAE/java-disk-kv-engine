@@ -278,7 +278,7 @@ class SpatialCacheEngineTest {
         engine.search(37.4979, 127.0276, 5.0, loader);   // HIT
 
         // 메트릭 출력
-        MetricsSnapshot metricsSnapshot = engine.getMetrics();
+        MetricsSnapshot m = engine.getMetrics();
         System.out.printf("""
         === Engine Metrics ===
         {
@@ -305,12 +305,12 @@ class SpatialCacheEngineTest {
             "overflowPageUsed": %d
           }
         }%n""",
-                metricsSnapshot.queryCount, metricsSnapshot.avgPageIds,
-                metricsSnapshot.pageHit, metricsSnapshot.pageMiss, metricsSnapshot.pageHitRate,
-                metricsSnapshot.cacheSize, metricsSnapshot.evictCount,
-                metricsSnapshot.pageReadCount, metricsSnapshot.pageWriteCount, metricsSnapshot.usedPageCount,
-                metricsSnapshot.flushCount, metricsSnapshot.flushedPages, metricsSnapshot.dirtyPages,
-                metricsSnapshot.overflowPageUsed
+                m.index().queryCount(), m.index().avgPageIds(),
+                m.cache().pageHit(), m.cache().pageMiss(), m.cache().hitRate(),
+                m.cache().cacheSize(), m.cache().evictCount(),
+                m.disk().pageReadCount(), m.disk().pageWriteCount(), m.disk().usedPageCount(),
+                m.storage().flushCount(), m.storage().flushedPages(), m.storage().dirtyPages(),
+                m.storage().overflowPageUsed()
         );
     }
     // -------------------------------------------------------------------------
@@ -536,10 +536,11 @@ class SpatialCacheEngineTest {
         });
 
         MetricsSnapshot m = engine.getMetrics();
-        assertEquals(1, m.rebuildCount);
+        assertEquals(1, m.storage().rebuildCount());
         // 20ms 를 잔 loader 를 감쌌으니 20 이상. 상한은 단위 검증 — 나노초를 그대로 넘기면 천만 단위가 된다
-        assertTrue(m.avgRebuildMs >= 20 && m.avgRebuildMs < 5_000,
-                "avgRebuildMs 는 ms 단위여야 한다: " + m.avgRebuildMs);
+        long ms = m.storage().totalRebuildMs();
+        assertTrue(ms >= 20 && ms < 5_000, "totalRebuildMs 는 ms 단위여야 한다: " + ms);
+        assertEquals(ms, m.storage().avgRebuildMs(), "한 번이면 평균 = 합");
     }
 
     @Test
@@ -547,7 +548,7 @@ class SpatialCacheEngineTest {
         assertThrows(RuntimeException.class, () ->
                 engine.rebuild(srm -> { throw new RuntimeException("loader failed"); }));
 
-        assertEquals(0, engine.getMetrics().rebuildCount);
+        assertEquals(0, engine.getMetrics().storage().rebuildCount());
     }
 
     @Test
@@ -562,19 +563,20 @@ class SpatialCacheEngineTest {
         engine.search(37.4979, 127.0276, 0.1, loader);
 
         MetricsSnapshot m = engine.getMetrics();
-        assertEquals(2, m.queryCount);
-        assertEquals(1, m.pageMiss);
-        assertEquals(1, m.pageHit);
-        assertEquals(0.5, m.pageHitRate);
-        assertEquals(1, m.cacheSize);
-        assertEquals(0, m.evictCount);
-        assertEquals(1, m.flushCount, "rebuild 의 flush 한 번");
-        assertEquals(1, m.flushedPages, "레코드 둘이 한 페이지에 들어간다");
-        assertEquals(1, m.usedPageCount);
-        assertEquals(0, m.dirtyPages, "flush 뒤에는 더러운 페이지가 없다");
-        assertEquals(0, m.overflowPageUsed);
-        assertEquals(0, m.warmupFailureCount);
-        assertTrue(m.pageReadCount >= 1, "MISS 가 디스크를 읽어야 한다: " + m.pageReadCount);
-        assertTrue(m.pageWriteCount >= 1, "flush 가 디스크에 써야 한다: " + m.pageWriteCount);
+        assertEquals(2, m.index().queryCount());
+        assertEquals(1.0, m.index().avgPageIds(), "두 검색 모두 페이지 하나");
+        assertEquals(1, m.cache().pageMiss());
+        assertEquals(1, m.cache().pageHit());
+        assertEquals(0.5, m.cache().hitRate());
+        assertEquals(1, m.cache().cacheSize());
+        assertEquals(0, m.cache().evictCount());
+        assertEquals(1, m.storage().flushCount(), "rebuild 의 flush 한 번");
+        assertEquals(1, m.storage().flushedPages(), "레코드 둘이 한 페이지에 들어간다");
+        assertEquals(1, m.disk().usedPageCount());
+        assertEquals(0, m.storage().dirtyPages(), "flush 뒤에는 더러운 페이지가 없다");
+        assertEquals(0, m.storage().overflowPageUsed());
+        assertEquals(0, m.storage().warmupFailureCount());
+        assertTrue(m.disk().pageReadCount() >= 1, "MISS 가 디스크를 읽어야 한다: " + m.disk().pageReadCount());
+        assertTrue(m.disk().pageWriteCount() >= 1, "flush 가 디스크에 써야 한다: " + m.disk().pageWriteCount());
     }
 }
