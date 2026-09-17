@@ -18,22 +18,27 @@ public class BenchmarkRunner {
     public static void main(String[] args) throws Exception {
 
         System.out.println("=== GeoSpatial Index Engine Benchmark ===");
+        System.out.println("warm-up 제외 반복 측정의 중앙값 · 후보 = 거리 계산을 돌린 건수 · 결과 = 반경 안 건수");
         System.out.println();
-        System.out.printf("%-10s %-15s %-15s%n", "건수", "Full Scan", "GeoHash");
-        System.out.println("-".repeat(40));
+        System.out.printf("%-10s %12s %9s %12s %9s %8s%n",
+                "건수", "Full Scan", "후보", "GeoHash", "후보", "결과");
+        System.out.println("-".repeat(66));
 
         for (int size : SIZES) {
-            long fullScan = FullScanBenchmark.run(size);
-            long geoHash  = GeohashBenchmark.run(size);
+            BenchmarkResult fullScan = FullScanBenchmark.run(size);
+            BenchmarkResult geoHash  = GeohashBenchmark.run(size);
 
-            System.out.printf("%-10d %-15s %-15s%n",
+            // 두 경로는 같은 데이터에 같은 반경이니 결과 건수가 같아야 한다. 다르면 인덱스가 놓친 것이다.
+            String check = fullScan.matched() == geoHash.matched()
+                    ? "" : "  !! Full Scan 결과 " + fullScan.matched() + " 과 불일치";
+
+            System.out.printf("%-10d %10.2fms %9d %10.2fms %9d %8d%s%n",
                     size,
-                    fullScan + "ms",
-                    geoHash  + "ms"
-            );
+                    fullScan.medianNs() / 1_000_000.0, fullScan.candidates(),
+                    geoHash.medianNs()  / 1_000_000.0, geoHash.candidates(),
+                    geoHash.matched(), check);
         }
 
-        System.out.println("-".repeat(40));
-        System.out.println("완료");
+        System.out.println("-".repeat(66));
     }
 }

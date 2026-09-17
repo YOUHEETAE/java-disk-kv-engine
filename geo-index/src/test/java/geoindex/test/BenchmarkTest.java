@@ -1,6 +1,9 @@
 package geoindex.test;
 
+import geoindex.benchmark.BenchmarkResult;
 import geoindex.benchmark.DummyDataGenerator;
+import geoindex.benchmark.FullScanBenchmark;
+import geoindex.benchmark.GeohashBenchmark;
 import geoindex.benchmark.Hospital;
 import org.junit.jupiter.api.Test;
 
@@ -35,5 +38,16 @@ class BenchmarkTest {
             assertEquals(small.get(i).coordinateX, large.get(i).coordinateX);
             assertEquals(small.get(i).coordinateY, large.get(i).coordinateY);
         }
+    }
+
+    @Test
+    void 두_경로의_반경_안_건수는_같다() throws Exception {
+        BenchmarkResult fullScan = FullScanBenchmark.run(10_000);
+        BenchmarkResult geoHash  = GeohashBenchmark.run(10_000);
+
+        assertEquals(10_000, fullScan.candidates(), "Full Scan 은 전부 훑는다");
+        assertTrue(geoHash.candidates() < fullScan.candidates(), "인덱스가 후보를 줄여야 한다: " + geoHash.candidates());
+        assertEquals(fullScan.matched(), geoHash.matched(), "후보를 줄였을 뿐 반경 안 병원을 빠뜨리면 안 된다");
+        assertTrue(fullScan.medianNs() > 0 && geoHash.medianNs() > 0);
     }
 }
