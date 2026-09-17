@@ -38,27 +38,24 @@ public class RecordManager {
             PageLayout.initializePage(page);
         }
 
-        int slotId = writeWithOverflow(pageId, page, value);
-        index.put(key, new RecordId(pageId, slotId));
+        index.put(key, writeWithOverflow(pageId, page, value));
     }
 
-    private int writeWithOverflow(int pageId, Page page, byte[] value) {
+    private RecordId writeWithOverflow(int pageId, Page page, byte[] value) {
         int slotId = PageLayout.writeRecord(page, value);
 
-        if (slotId == -1) { // 공간 부족 → overflow
-            int overflowPageId = PageLayout.getOverflowPageId(page);
-            if (overflowPageId == PageLayout.NO_OVERFLOW) {
-                overflowPageId = allocateNewPage();
-                PageLayout.setOverflowPageId(page, overflowPageId);
-            }
-            Page overflowPage = cacheManager.getOrCreatePage(overflowPageId);
-            if (!PageLayout.isInitialized(overflowPage)) {
-                PageLayout.initializePage(overflowPage);
-            }
-            return writeWithOverflow(overflowPageId, overflowPage, value);
-        }
+        if(slotId != -1) return new RecordId(pageId, slotId);
 
-        return slotId;
+        int overflowPageId = PageLayout.getOverflowPageId(page);
+        if (overflowPageId == PageLayout.NO_OVERFLOW) {
+            overflowPageId = allocateNewPage();
+            PageLayout.setOverflowPageId(page, overflowPageId);
+        }
+        Page overflowPage = cacheManager.getOrCreatePage(overflowPageId);
+        if (!PageLayout.isInitialized(overflowPage)) {
+            PageLayout.initializePage(overflowPage);
+        }
+        return writeWithOverflow(overflowPageId, overflowPage, value);
     }
 
     public byte[] get(String key) {

@@ -240,4 +240,24 @@ class RecordManagerTest {
         assertEquals(0, result.size());
     }
 
+    /**
+     * 기존 overflow 테스트들은 키마다 해시가 달라 각자 다른 홈 페이지로 간다 — overflow 경로를
+     * 타지 않는다. 여기서는 같은 홈 페이지에 떨어지는 키만 골라 한 페이지를 넘치게 한다.
+     */
+    @Test
+    void 같은_홈_페이지로_몰린_레코드는_overflow_체인을_타고도_전부_읽힌다() {
+        int home = Math.abs("seed".hashCode() % 100000);
+        List<String> keys = new java.util.ArrayList<>();
+        for (int i = 0; keys.size() < 12; i++) {
+            String k = "k" + i;
+            if (Math.abs(k.hashCode() % 100000) == home) keys.add(k);
+        }
+        byte[] big = new byte[1000];                       // 4KB 페이지에 서너 개면 가득 찬다
+
+        for (String k : keys) recordManager.put(k, (k + new String(big)).getBytes());
+
+        assertTrue(cacheManager.getDirtyPageCount() > 1, "홈 페이지 하나에 다 들어갔다면 overflow 를 안 탄 것이다");
+        assertEquals(12, recordManager.getAllValues().size(), "overflow 로 넘어간 레코드를 잃으면 안 된다");
+        for (String k : keys) assertTrue(new String(recordManager.get(k)).startsWith(k));
+    }
 }
