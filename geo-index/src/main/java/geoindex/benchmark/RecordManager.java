@@ -24,6 +24,7 @@ public class RecordManager {
     private static final int MAX_PAGES = 100000;
     private final CacheManager cacheManager;
     private final Map<String, RecordId> index;
+    private int nextOverflowPageId = MAX_PAGES;
 
     public RecordManager(CacheManager cacheManager) {
         this.cacheManager = cacheManager;
@@ -76,10 +77,6 @@ public class RecordManager {
     }
 
     private int allocateNewPage() {
-        for (int pageId = 0; pageId < MAX_PAGES; pageId++) {
-            Page page = cacheManager.getOrCreatePage(pageId);
-            if (!PageLayout.isInitialized(page)) return pageId;
-        }
-        throw new IllegalStateException("no available pages");
+        return nextOverflowPageId++;
     }
 }
