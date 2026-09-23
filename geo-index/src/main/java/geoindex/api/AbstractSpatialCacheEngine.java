@@ -77,7 +77,7 @@ public abstract class AbstractSpatialCacheEngine<T> {
                 .flatMap(Collection::stream)
                 .collect(Collectors.toList());
 
-        int chunkSize = 1000;                    // IN 절 길이 제한 회피. 쿼리는 나누고 결과는 합친다
+        int chunkSize = spatialCacheEngine.getWarmupChunkSize(); // IN 절 길이 제한 회피. 쿼리는 나누고 결과는 합친다
         Map<String, T> byCode = new HashMap<>();
         for (int i = 0; i < allCodes.size(); i += chunkSize) {
             List<String> chunk = allCodes.subList(i, Math.min(i + chunkSize, allCodes.size()));

@@ -20,6 +20,11 @@ import java.time.Duration;
  *
  * UNLIMITED 와 WARMUP_ALL 은 값이 같은 -1 이지만 뜻이 다르다 — 하나는 "상한 없음",
  * 하나는 "전부". 그래서 상수를 따로 둔다.
+ *
+ * warmupChunkSize 의 기본값은 1000 이다. 예열 대상 페이지들의 코드를 모은 목록을
+ * loadByCodes 에 몇 개씩 넘길지 정한다. 정책에 둔 이유는 이건 DB 의 제약이지 엔진의
+ * 성질이 아니기 때문이다 — IN 절에 넣을 수 있는 개수는 DB 와 매퍼마다 다르고,
+ * 엔진은 어느 DB 인지 모른다. <= 0 은 허용하지 않는다.
  */
 public class CachePolicy {
 
@@ -32,11 +37,13 @@ public class CachePolicy {
     private final Duration ttl;
     private final int maxSize;
     private final int warmupSize;
+    private final int warmupChunkSize;
 
     private CachePolicy(Builder builder) {
         this.ttl = builder.ttl;
         this.maxSize = builder.maxSize;
         this.warmupSize = builder.warmupSize;
+        this.warmupChunkSize = builder.warmupChunkSize;
     }
 
     public boolean isTtlEnabled() {
@@ -63,6 +70,7 @@ public class CachePolicy {
         private Duration ttl = TTL_DISABLE;
         private int maxSize = UNLIMITED;
         private int warmupSize = 3000;
+        private int warmupChunkSize = 1000;
 
         public Builder ttl(Duration ttl) {
             this.ttl = (ttl == null) ? TTL_DISABLE : ttl;
@@ -79,6 +87,14 @@ public class CachePolicy {
             return this;
         }
 
+        public Builder warmupChunkSize(int warmupChunkSize) {
+            if(warmupChunkSize <= 0) {
+                throw new IllegalArgumentException("warmupChunkSize must be > 0");
+            }
+            this.warmupChunkSize = warmupChunkSize;
+            return this;
+        }
+
         public CachePolicy build() {
             return new CachePolicy(this);
         }
@@ -88,7 +104,8 @@ public class CachePolicy {
     public String toString() {
         return "CachePolicy{ttl=" + (isTtlEnabled() ? ttl : "DISABLE") +
                 ", maxSize=" + (isMaxSizeEnabled() ? maxSize : "UNLIMITED") +
-                ", warmupSize=" + (isWarmupAll() ? "ALL" : warmupSize) + '}';
+                ", warmupSize=" + (isWarmupAll() ? "ALL" : warmupSize) +
+                ", warmupChunkSize=" + warmupChunkSize + '}';
     }
 
     public int getWarmupSize() {
@@ -97,5 +114,9 @@ public class CachePolicy {
 
     public boolean isWarmupAll(){
         return warmupSize == WARMUP_ALL;
+    }
+
+    public int getWarmupChunkSize() {
+        return warmupChunkSize;
     }
 }

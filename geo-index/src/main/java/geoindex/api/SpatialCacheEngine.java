@@ -223,6 +223,10 @@ public class SpatialCacheEngine<T> {
                 ));
     }
 
+    public int getWarmupChunkSize() {
+        return pageCacheStore.getPolicy().getWarmupChunkSize();
+    }
+
     /** 접근 횟수를 파일로. 종료 시 한 번 — 다음 기동의 예열 근거가 된다. */
     public void saveWarmup() {
         warmupStore.saveHitCounts();
