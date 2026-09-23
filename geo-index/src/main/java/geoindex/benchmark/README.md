@@ -10,10 +10,16 @@
 
 | 항목 | 내용 |
 |------|------|
-| **데이터** | 더미 병원 데이터 (SEED=42, 한국 좌표 범위) |
+| **데이터** | 더미 병원 데이터 (SEED=42, 한국 좌표 범위 균등 분포) |
 | **검색 조건** | 강남 좌표 기준 반경 5km |
 | **검색 좌표** | lat: 37.4979, lng: 127.0276 |
-| **필터링** | 사각형 MBR |
+| **필터링** | haversine 거리 |
+| **측정** | warm-up 5회 제외, 20회 측정의 중앙값 (`System.nanoTime`) |
+| **함께 보고** | 거리 계산을 돌린 후보 수, 반경 안 결과 건수 |
+
+`run()` 은 `BenchmarkResult(medianNs, candidates, matched)` 를 돌려주고 `BenchmarkRunner`
+가 표로 찍는다. 두 경로의 `matched` 는 같아야 한다 — 인덱스는 후보를 줄일 뿐 반경 안
+레코드를 빠뜨리면 안 되므로, 다르면 그 행에 불일치 표시가 붙는다.
 
 ### 실제 데이터 벤치마크 (Spring 연동)
 
@@ -177,7 +183,8 @@ benchmark/
   DummyDataGenerator.java        더미 데이터 생성 (SEED=42)
   FullScanBenchmark.java         Full Scan 측정
   GeohashBenchmark.java          GeoHash 측정
-  BenchmarkRunner.java           규모별 비교 실행
+  BenchmarkRunner.java           규모별 비교 실행 (진입점)
+  BenchmarkResult.java           한 번의 측정 결과 (medianNs · candidates · matched)
   RecordManager.java             Phase 0 KV 저장소 — Full Scan 의 비교 기준선
   RecordId.java                  레코드 물리 위치 값 객체 (pageId + slotId)
 

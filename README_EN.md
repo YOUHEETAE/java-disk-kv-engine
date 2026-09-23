@@ -519,14 +519,14 @@ public class GeoIndexMetricsExporter {
 
     private void register(String type, SpatialCacheEngine<?> engine) {
         List<Tag> tags = List.of(Tag.of("type", type));
-        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().queryCount);
-        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().pageHit);
-        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().pageMiss);
-        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().pageHitRate);
-        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cacheSize);
-        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().pageReadCount);
-        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().pageWriteCount);
-        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().overflowPageUsed);
+        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().index().queryCount());
+        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().cache().pageHit());
+        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().cache().pageMiss());
+        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().cache().hitRate());
+        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cache().cacheSize());
+        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().disk().pageReadCount());
+        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().disk().pageWriteCount());
+        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().storage().overflowPageUsed());
     }
 }
 ```
@@ -635,9 +635,9 @@ geo-index/
     AbstractSpatialCacheEngine.java  Template method — search/warmup/rebuild/shutdown shared logic
     SpatialCacheEngine.java          Top-level API — JVM cache (getOrMiss / put / clearCache)
     SpatialRecordManager.java        File search / store / rebuild
-    PageResult.java                  Cache lookup result value object
   cache/
     PageCacheStore.java         LinkedHashMap LRU-based cache infrastructure
+    PageResult.java             Cache lookup result value object (HIT/MISS)
     CachePolicy.java            TTL / maxSize policy
     CacheEntry.java             Cache value wrapper (data + expiry time)
     WarmupStore.java            Per-pageId access count tracking + disk persistence

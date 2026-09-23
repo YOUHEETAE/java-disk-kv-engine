@@ -9,6 +9,21 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 파일과 상위 계층 사이의 페이지 버퍼. 한 pageId 에 Page 객체가 하나만 존재하도록 보장하고,
+ * 수정은 메모리에서만 하고 flush 때 한꺼번에 파일에 쓴다(Write-Back).
+ *
+ * 유일성이 계약이다. 같은 pageId 로 두 Page 객체가 생기면 한쪽의 수정이 다른 쪽을 덮어
+ * 예외 없이 사라진다. computeIfAbsent 로 생성과 조회를 한 연산에 묶어 그것을 막는다.
+ *
+ * 읽기와 쓰기 진입점이 나뉘어 있다. 검색이 훑는 pageId 대부분은 아무도 쓴 적 없는 칸이라,
+ * 읽기가 빈 페이지를 만들면 회수할 방법이 없다.
+ *
+ * 축출이 없다 — 한 번 올라온 페이지는 clearCache 나 rebuild 까지 남는다. 축출을 넣으려면
+ * 유일성 계약(pin/unpin)과 flush 의 락 참여를 함께 설계해야 하므로 별도 과제로 둔다.
+ *
+ * flush 는 put 과 겹치지 않게 불린다는 전제 위에 있다.
+ */
 public class CacheManager {
     private final ConcurrentHashMap<Integer, Page> cache;
     private final DiskManager diskManager;
@@ -64,17 +79,14 @@ public class CacheManager {
         List<Page> pages = new ArrayList<>(cache.values());
         pages.sort(Comparator.comparingInt(Page::getPageId));
         for (Page page : pages) {
-            // 락 없이 쓴다. 예전엔 synchronized (page) 가 있었지만 쓰기 경로가 잡는 것은
-            // SpatialRecordManager 의 pageLocks(RWLock)라 별개 객체였고, 상호배제는
-            // 같은 락 객체를 잡을 때만 성립하므로 아무것도 막지 못했다. 락처럼 보여
-            // 검토를 통과시키는 쪽이 더 해로워 지웠다.
+            // 락 없이 쓴다. 쓰기 경로가 잡는 것은 SpatialRecordManager 의 pageLocks(RWLock)라
+            // 여기서 page 객체를 잠가도 상호배제가 성립하지 않는다 — 같은 락 객체를 잡아야 한다.
+            // 지금 안전한 근거는 flush 가 put 과 겹치지 않게 불린다는 것 하나다.
             //
-            // 지금 안전한 이유는 flush 가 put 과 겹치지 않게 불리기 때문이다.
-            // 겹치게 하려면 pageLocks 의 키를 primary 에서 각 pageId 로 내려야 한다 —
-            // flush 는 페이지의 primary 를 모르고 자기 pageId 만 알기 때문이다.
-            // 그러면 flush 가 readLock 을 잡고 같은 락에 참여할 수 있다. 대신 체인이
-            // 한 문 뒤에 있지 못하니, append 를 "overflow 페이지를 완성한 뒤 링크를
-            // 건다"로 뒤집어야 독자가 빈 페이지를 보지 않는다.
+            // 겹치게 하려면 pageLocks 의 키를 primary 에서 각 pageId 로 내려야 한다 — flush 는
+            // 페이지의 primary 를 모르고 자기 pageId 만 안다. 그러면 flush 가 readLock 을 잡고
+            // 같은 락에 참여할 수 있다. 대신 체인이 한 문 뒤에 있지 못하니, append 를 "overflow
+            // 페이지를 완성한 뒤 링크를 건다"로 뒤집어야 독자가 빈 페이지를 보지 않는다.
             if (page.isDirty()) {
                 diskManager.savePage(page);
                 page.clearDirty();
