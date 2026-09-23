@@ -157,33 +157,26 @@ class RecordManagerTest {
         assertEquals("value3", new String(result));
     }
 
+    /**
+     * 1000건 규모의 왕복 — 이 파일에서 유일하게 규모가 있는 테스트다. put 1000번 뒤 전부
+     * 제 값으로 읽히는지 본다. 덮어쓰기나 overflow 로 인덱스가 어긋나면 여기서 드러난다.
+     *
+     * 원래 getMs < 100 을 단정하고 있었다. 머신이 느리거나 다른 테스트와 겹치면 코드가
+     * 멀쩡한데도 빨개지는 단정이라 뺐다 — 성능은 benchmark 패키지가 warm-up 과 중앙값으로 잰다.
+     */
     @Test
-    void testPerformanceO1vsOn() {
+    void 천_건을_넣고_전부_제_값으로_읽힌다() {
         int count = 1000;
 
-        long startPut = System.nanoTime();
         for (int i = 0; i < count; i++) {
             recordManager.put("key" + i, ("value" + i).getBytes());
         }
-        long endPut = System.nanoTime();
 
-        long startGet = System.nanoTime();
         for (int i = 0; i < count; i++) {
             byte[] result = recordManager.get("key" + i);
-            assertNotNull(result);
+            assertNotNull(result, "key" + i + " 가 사라졌다");
             assertEquals("value" + i, new String(result));
         }
-        long endGet = System.nanoTime();
-
-        long putMs = (endPut - startPut) / 1_000_000;
-        long getMs = (endGet - startGet) / 1_000_000;
-
-        System.out.println("=== Performance Test ===");
-        System.out.println("1000 puts: " + putMs + "ms");
-        System.out.println("1000 gets: " + getMs + "ms");
-        System.out.println("Avg get:   " + (getMs / (double)count) + "ms");
-
-        assertTrue(getMs < 100, "1000 O(1) reads should complete < 100ms");
     }
 
     @Test
