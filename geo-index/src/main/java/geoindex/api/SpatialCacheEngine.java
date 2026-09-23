@@ -2,6 +2,7 @@ package geoindex.api;
 
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.cache.PageResult;
 import geoindex.cache.WarmupStore;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;

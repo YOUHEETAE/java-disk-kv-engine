@@ -1,6 +1,5 @@
 package geoindex.test;
 
-import geoindex.api.PageResult;
 import geoindex.api.SpatialCacheEngine;
 import geoindex.api.SpatialRecordManager;
 import geoindex.buffer.CacheManager;

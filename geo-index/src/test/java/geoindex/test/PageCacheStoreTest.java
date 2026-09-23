@@ -1,6 +1,6 @@
 package geoindex.test;
 
-import geoindex.api.PageResult;
+import geoindex.cache.PageResult;
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
 import geoindex.cache.WarmupStore;
