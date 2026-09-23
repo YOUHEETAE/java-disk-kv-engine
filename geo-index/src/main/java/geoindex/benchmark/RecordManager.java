@@ -24,6 +24,7 @@ public class RecordManager {
     private static final int MAX_PAGES = 100000;
     private final CacheManager cacheManager;
     private final Map<String, RecordId> index;
+    private int nextOverflowPageId = MAX_PAGES;
 
     public RecordManager(CacheManager cacheManager) {
         this.cacheManager = cacheManager;
@@ -38,27 +39,24 @@ public class RecordManager {
             PageLayout.initializePage(page);
         }
 
-        int slotId = writeWithOverflow(pageId, page, value);
-        index.put(key, new RecordId(pageId, slotId));
+        index.put(key, writeWithOverflow(pageId, page, value));
     }
 
-    private int writeWithOverflow(int pageId, Page page, byte[] value) {
+    private RecordId writeWithOverflow(int pageId, Page page, byte[] value) {
         int slotId = PageLayout.writeRecord(page, value);
 
-        if (slotId == -1) { // 공간 부족 → overflow
-            int overflowPageId = PageLayout.getOverflowPageId(page);
-            if (overflowPageId == PageLayout.NO_OVERFLOW) {
-                overflowPageId = allocateNewPage();
-                PageLayout.setOverflowPageId(page, overflowPageId);
-            }
-            Page overflowPage = cacheManager.getOrCreatePage(overflowPageId);
-            if (!PageLayout.isInitialized(overflowPage)) {
-                PageLayout.initializePage(overflowPage);
-            }
-            return writeWithOverflow(overflowPageId, overflowPage, value);
-        }
+        if(slotId != -1) return new RecordId(pageId, slotId);
 
-        return slotId;
+        int overflowPageId = PageLayout.getOverflowPageId(page);
+        if (overflowPageId == PageLayout.NO_OVERFLOW) {
+            overflowPageId = allocateNewPage();
+            PageLayout.setOverflowPageId(page, overflowPageId);
+        }
+        Page overflowPage = cacheManager.getOrCreatePage(overflowPageId);
+        if (!PageLayout.isInitialized(overflowPage)) {
+            PageLayout.initializePage(overflowPage);
+        }
+        return writeWithOverflow(overflowPageId, overflowPage, value);
     }
 
     public byte[] get(String key) {
@@ -79,10 +77,6 @@ public class RecordManager {
     }
 
     private int allocateNewPage() {
-        for (int pageId = 0; pageId < MAX_PAGES; pageId++) {
-            Page page = cacheManager.getOrCreatePage(pageId);
-            if (!PageLayout.isInitialized(page)) return pageId;
-        }
-        throw new IllegalStateException("no available pages");
+        return nextOverflowPageId++;
     }
 }

@@ -99,7 +99,7 @@ class AbstractSpatialCacheEngineTest {
         assertFalse(engine.isCached(pageId), "예열이 안 됐으니 캐시는 비어 있다");
 
         // 관측된다
-        assertEquals(1, service.getMetrics().warmupFailureCount, "예열 실패는 메트릭으로 남아야 한다");
+        assertEquals(1, service.getMetrics().storage().warmupFailureCount(), "예열 실패는 메트릭으로 남아야 한다");
     }
 
     // -------------------------------------------------------------------------
@@ -203,6 +203,55 @@ class AbstractSpatialCacheEngineTest {
         assertDoesNotThrow(() -> service.rebuild(loader -> loader.put(37.4979, 127.0276, "NEW")));
 
         assertTrue(engine.isCached(pageId), "예열이 캐시를 채웠어야 한다");
-        assertEquals(0, service.getMetrics().warmupFailureCount);
+        assertEquals(0, service.getMetrics().storage().warmupFailureCount());
+    }
+
+    // -------------------------------------------------------------------------
+    // warmupChunkSize — 예열 코드 목록을 몇 개씩 loadByCodes 로 넘길지. IN 절 한계는 DB 마다
+    // 다르니 정책이 정한다. 값이 코드에 박혀 있던 동안에는 나눠 부르는지를 테스트할 수 없었다.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void 예열은_warmupChunkSize_단위로_loadByCodes를_나눠_부른다() {
+        // 코드 5개를 한 페이지에 — 한 페이지의 코드가 여러 청크로 갈리는 경우까지 본다
+        for (int i = 0; i < 5; i++) {
+            recordManager.put(37.4979, 127.0276, ("C" + i).getBytes());
+        }
+        cacheManager.flush();
+        cacheManager.clearCache();
+        int pageId = index.toPageId(37.4979, 127.0276);
+
+        WarmupStore store = new WarmupStore(Path.of(WARMUP_FILE));
+        store.recordAccess(pageId);
+
+        List<Integer> callSizes = new java.util.ArrayList<>();
+        List<String> asked = new java.util.ArrayList<>();
+        TestEngine service = new TestEngine(new SpatialCacheEngine<>(recordManager,
+                CachePolicy.builder().warmupChunkSize(2).build(), metrics, store));
+        service.loader = codes -> {
+            callSizes.add(codes.size());
+            asked.addAll(codes);
+            Map<String, String> m = new HashMap<>();
+            for (String c : codes) m.put(c, "v-" + c);
+            return m;
+        };
+
+        service.warmup();
+
+        assertEquals(List.of(2, 2, 1), callSizes, "5개를 2개씩 나눠 세 번 불러야 한다");
+        assertEquals(5, asked.size(), "나눠 불러도 전부 물어야 한다");
+        assertTrue(asked.containsAll(List.of("C0", "C1", "C2", "C3", "C4")));
+        assertEquals(1, service.getMetrics().cache().cacheSize(), "나눠 받은 결과는 한 페이지로 합쳐진다");
+    }
+
+    @Test
+    void warmupChunkSize의_기본값은_1000이고_0이하는_거부한다() {
+        assertEquals(1000, CachePolicy.DEFAULT.getWarmupChunkSize(), "안 주면 1000");
+        assertEquals(1000, CachePolicy.builder().build().getWarmupChunkSize());
+        assertEquals(50, CachePolicy.builder().warmupChunkSize(50).build().getWarmupChunkSize());
+
+        // 0 이면 루프가 제자리를 돌고 음수면 아예 돌지 않는다 — 조용히 넘기면 예열이 비어 버린다
+        assertThrows(IllegalArgumentException.class, () -> CachePolicy.builder().warmupChunkSize(0));
+        assertThrows(IllegalArgumentException.class, () -> CachePolicy.builder().warmupChunkSize(-1));
     }
 }

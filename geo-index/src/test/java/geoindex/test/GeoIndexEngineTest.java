@@ -66,6 +66,6 @@ class GeoIndexEngineTest {
         });
 
         assertEquals(List.of("v-B0001"), result);
-        assertEquals(1, built.getMetrics().pageMiss, "EngineMetrics 하나를 전 계층이 공유해야 한다");
+        assertEquals(1, built.getMetrics().cache().pageMiss(), "EngineMetrics 하나를 전 계층이 공유해야 한다");
     }
 }

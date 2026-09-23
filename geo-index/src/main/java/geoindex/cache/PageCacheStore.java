@@ -1,6 +1,5 @@
 package geoindex.cache;
 
-import geoindex.api.PageResult;
 import geoindex.metric.EngineMetrics;
 
 import java.time.Instant;

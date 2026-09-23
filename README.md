@@ -522,14 +522,14 @@ public class GeoIndexMetricsExporter {
 
     private void register(String type, SpatialCacheEngine<?> engine) {
         List<Tag> tags = List.of(Tag.of("type", type));
-        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().queryCount);
-        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().pageHit);
-        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().pageMiss);
-        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().pageHitRate);
-        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cacheSize);
-        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().pageReadCount);
-        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().pageWriteCount);
-        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().overflowPageUsed);
+        meterRegistry.gauge("geoindex.index.queryCount",         tags, engine, e -> e.getMetrics().index().queryCount());
+        meterRegistry.gauge("geoindex.cache.hit",                tags, engine, e -> e.getMetrics().cache().pageHit());
+        meterRegistry.gauge("geoindex.cache.miss",               tags, engine, e -> e.getMetrics().cache().pageMiss());
+        meterRegistry.gauge("geoindex.cache.hitRate",            tags, engine, e -> e.getMetrics().cache().hitRate());
+        meterRegistry.gauge("geoindex.cache.size",               tags, engine, e -> e.getMetrics().cache().cacheSize());
+        meterRegistry.gauge("geoindex.disk.pageRead",            tags, engine, e -> e.getMetrics().disk().pageReadCount());
+        meterRegistry.gauge("geoindex.disk.pageWrite",           tags, engine, e -> e.getMetrics().disk().pageWriteCount());
+        meterRegistry.gauge("geoindex.storage.overflowPageUsed", tags, engine, e -> e.getMetrics().storage().overflowPageUsed());
     }
 }
 ```
@@ -639,10 +639,10 @@ geo-index/
     AbstractSpatialCacheEngine.java  템플릿 메서드 — search/warmup/rebuild/shutdown 공통 로직
     SpatialCacheEngine.java          최상단 API — JVM 캐시 (getOrMiss / put / clearCache)
     SpatialRecordManager.java        파일 검색 / 저장 / rebuild
-    PageResult.java                  캐시 조회 결과 값 객체
   cache/
     PageCacheStore.java         LinkedHashMap LRU 기반 캐시 인프라
-    CachePolicy.java            TTL / maxSize 정책
+    PageResult.java             캐시 조회 결과 값 객체 (HIT/MISS 판정)
+    CachePolicy.java            TTL / maxSize / warmupSize / warmupChunkSize 정책
     CacheEntry.java             캐시 값 래퍼 (데이터 + 만료시각)
     WarmupStore.java            pageId별 접근 횟수 추적 + 디스크 영속
   metric/
@@ -730,7 +730,7 @@ geo-index/
     - PageCacheStore 연동 — getOrMiss() 시 recordAccess() 호출
     - SpatialCacheEngine.getWarmupTargets() / saveWarmup() — Spring 연동 API
     - Spring @PostConstruct 비동기 워밍업 / @PreDestroy persist 흐름 설계
-    - IN 쿼리 청크(1000건) 분할로 DB 연결 타임아웃 방지
+    - IN 쿼리를 warmupChunkSize(기본 1000)씩 나눠 DB 연결 타임아웃 방지
 ✅ Phase 16: usedPageCount 메트릭 추가
     - DiskManager.getUsedPageCount() — pageMap.size() 기반 실제 사용 pageId 수
     - CacheManager / SpatialRecordManager 경유 노출

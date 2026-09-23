@@ -23,7 +23,7 @@ GeoIndexEngine.<T>builder()
 |------|-----------|------|
 | `dbFile` | 필수 | 색인 파일 경로. 누락 시 `IllegalStateException` |
 | `warmupFile` | 필수 | 워밍업 히트 카운트 영속 파일 경로. 누락 시 `IllegalStateException` |
-| `cachePolicy` | 선택 | TTL / maxSize / warmupSize 정책. 기본값 `CachePolicy.DEFAULT` |
+| `cachePolicy` | 선택 | TTL / maxSize / warmupSize / warmupChunkSize 정책. 기본값 `CachePolicy.DEFAULT` |
 
 필수값 검사는 파일을 만들기 전에 하므로 실패해도 흔적이 남지 않는다.
 
@@ -258,9 +258,9 @@ FullScan: 5234건 | GeoIndex: 5234건 | 일치: true | 누락: 0건 ✅
 
 ---
 
-### PageResult\<T\> (값 객체)
+### PageResult\<T\> (값 객체 — cache 패키지)
 
-`PageCacheStore.getOrMiss()`가 판정을 돌려주는 타입. `SpatialCacheEngine` 안에서만 쓰인다 — cache 패키지로 옮길 후보다.
+`PageCacheStore.getOrMiss()`가 판정을 돌려주는 타입. `PageCacheStore` 와 `SpatialCacheEngine` 사이에서만 쓰이므로 만드는 쪽 패키지(`geoindex.cache`)에 있다.
 
 ```java
 PageResult.hit(pageId, List<T> cached)         // HIT: 캐시 데이터 포함

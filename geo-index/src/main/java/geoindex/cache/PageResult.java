@@ -1,4 +1,4 @@
-package geoindex.api;
+package geoindex.cache;
 
 import java.util.List;
 
@@ -7,8 +7,7 @@ import java.util.List;
  * 목록을 든다 — 둘 중 하나만 채워지고 나머지는 null 이다. 생성자가 private 이라 hit / miss
  * 두 갈래로만 만들 수 있고, isHit() 이 어느 갈래인지 답한다.
  *
- * 쓰는 곳은 PageCacheStore 와 SpatialCacheEngine 사이뿐이다. 판정만 돌려주던 3-arg search 가
- * 사라지면서 밖으로 나갈 일이 없어졌다 — cache 패키지로 옮길 후보다.
+ * 쓰는 곳은 PageCacheStore 와 SpatialCacheEngine 사이뿐이다.
  */
 public class PageResult<T> {
 

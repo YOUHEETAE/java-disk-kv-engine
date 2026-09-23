@@ -24,11 +24,12 @@ pageId 단위 JVM 캐시 인프라 — Spring 없이 순수 Java 제네릭으로
 ### CachePolicy
 
 ```java
-CachePolicy.DEFAULT           // TTL_DISABLE + maxSize 무제한 + warmupSize 3000
+CachePolicy.DEFAULT           // TTL_DISABLE + maxSize 무제한 + warmupSize 3000 + warmupChunkSize 1000
 CachePolicy.builder()
     .ttl(Duration.ofDays(7))
     .maxSize(5000)
     .warmupSize(500)          // -1 (WARMUP_ALL) 이면 기록 전부
+    .warmupChunkSize(500)     // 0 이하는 거부
     .build()
 ```
 
@@ -37,6 +38,9 @@ TTL 활성화: Spring @Value로 주입 가능 (`cache.ttl.days=7`)
 warmupSize: 재시작 때 미리 채울 pageId 수. 기본 3000. maxSize 가 켜져 있으면 그 이하로 한 번 더 잘린다 —
 캐시에 못 들어갈 것을 DB 에서 가져올 이유가 없다. UNLIMITED 와 WARMUP_ALL 은 값이 같은 -1 이지만
 뜻이 다르다(상한 없음 / 전부).
+warmupChunkSize: 예열 코드 목록을 loadByCodes 에 몇 개씩 넘길지. 기본 1000. IN 절에 넣을 수 있는
+개수는 DB 와 매퍼마다 다르고 엔진은 어느 DB 인지 모르므로 정책에 둔다. 한 번에 전부 보내려면
+Integer.MAX_VALUE 를 준다 — 그래서 "제한 없음" 센티넬은 따로 두지 않았다.
 
 ---
 
@@ -261,7 +265,7 @@ rebuild 후 hitCounts 초기화 안 함 → 과거 히스토리가 워밍업 핵
 ```
 서버 시작 @PostConstruct → AbstractSpatialCacheEngine.warmup()
   → spatialCacheEngine.getWarmupTargets()             // 정책이 정한 개수만큼 Top N pageId → 코드 목록, 인기 내림차순
-  → loadByCodes(chunk)  ×  (코드 수 / 1000)            // 서비스가 구현한 DB 조회, IN 절 청크
+  → loadByCodes(chunk)  ×  (코드 수 / warmupChunkSize) // 서비스가 구현한 DB 조회, IN 절 청크
   → spatialCacheEngine.putCache(pageId, data)          // 페이지별로 나눠, 인기 오름차순으로 적재
                                                         //   LRU 는 먼저 넣은 것부터 버리므로 가장 인기 있는 것을 마지막에
 

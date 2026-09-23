@@ -34,12 +34,15 @@ engine.getMetrics()  // 모든 레이어 카운터 정확히 집계됨
 
 각 레이어가 공유하는 카운터 저장소. `AtomicLong`으로 thread-safe하게 누적한다.
 
+카운터는 프로세스 수명 동안 단조 증가하고 리셋이 없다. 증가율("최근 5분에 몇 번")은
+수집 측이 두 시점의 차이로 낸다 — 엔진이 0 으로 되돌리면 재시작과 리셋을 구분할 수 없다.
+
 **카운터 구성:**
 ```
-Index   : queryCount, totalPageIds, totalIntervals
+Index   : queryCount, totalPageIds
 Cache   : pageHit, pageMiss, evictCount
 Disk    : pageReadCount, pageWriteCount
-Storage : flushCount, flushedPages, rebuildCount, totalRebuildMs
+Storage : flushCount, flushedPages, rebuildCount, totalRebuildMs, warmupFailureCount
 ```
 
 **주요 메서드:**
@@ -54,8 +57,8 @@ void incrementFlushCount()
 void incrementFlushedPages()
 void incrementEvictCount()
 void incrementRebuildCount()
+void incrementWarmupFailureCount()
 void addPageIds(int count)
-void addIntervals(int count)
 void addRebuildMs(long ms)
 
 // SpatialCacheEngine에서만 호출
@@ -80,33 +83,36 @@ return engineMetrics.snapshot(
 
 ### MetricsSnapshot.java
 
-특정 시점의 메트릭 값을 담는 불변 DTO. `snapshot()` 호출 시 평균값 계산이 완료된 상태로 반환된다.
+특정 시점의 값을 담는 record. 계층별로 나눠 담는다 — 어느 층의 값인지가 읽는 쪽 코드에
+그대로 보이고, 생성자 인자가 한눈에 세어지는 크기라 자리 바뀜 사고가 나지 않는다.
 
 ```java
-// Index
-long   queryCount
-double avgPageIds      // totalPageIds / queryCount
-double avgIntervals    // totalIntervals / queryCount
+record MetricsSnapshot(Index index, Cache cache, Disk disk, Storage storage)
 
-// Cache
-long   pageHit
-long   pageMiss
-double pageHitRate     // pageHit / (pageHit + pageMiss)
-int    cacheSize
-long   evictCount
+record Index(long queryCount, long totalPageIds)
+    double avgPageIds()                 // totalPageIds / queryCount
 
-// Disk
-long   pageReadCount
-long   pageWriteCount
+record Cache(long pageHit, long pageMiss, long evictCount, int cacheSize)
+    double hitRate()                    // pageHit / (pageHit + pageMiss)
 
-// Storage
-long   flushCount
-long   flushedPages
-long   rebuildCount
-long   avgRebuildMs      // totalRebuildMs / rebuildCount
-int    dirtyPages
-int    overflowPageUsed  // 현재 사용 중인 overflow 페이지 수 (핫스팟 모니터링용)
-int    usedPageCount     // 실제 디스크에 데이터가 기록된 pageId 수
+record Disk(long pageReadCount, long pageWriteCount, int usedPageCount)
+                                        // usedPageCount = 파일에 기록된 페이지 수
+
+record Storage(long flushCount, long flushedPages,
+               long rebuildCount, long totalRebuildMs, long warmupFailureCount,
+               int dirtyPages, int overflowPageUsed)
+    long avgRebuildMs()                 // totalRebuildMs / rebuildCount
+```
+
+**비율·평균을 저장하지 않는 이유:** 합과 횟수를 원값으로 내야 수집 측이 두 시점의 차이로
+구간 평균을 낼 수 있다. 평균을 저장해 버리면 평생 평균만 남아, 백 번째 재구축이 느려져도
+앞의 아흔아홉 번에 희석된다. Prometheus 의 `_sum` / `_count` 와 같은 모양이다.
+
+**읽는 쪽:**
+```java
+MetricsSnapshot m = engine.getMetrics();
+m.cache().hitRate();
+m.storage().warmupFailureCount();
 ```
 
 ---
@@ -119,9 +125,9 @@ int    usedPageCount     // 실제 디스크에 데이터가 기록된 pageId �
 @Bean
 MeterBinder engineMetrics(SpatialCacheEngine<?> engine) {
     return registry -> {
-        Gauge.builder("engine.cache.hit_rate",  engine, e -> e.getMetrics().pageHitRate).register(registry);
-        Gauge.builder("engine.cache.size",      engine, e -> e.getMetrics().cacheSize).register(registry);
-        Gauge.builder("engine.disk.read_count", engine, e -> e.getMetrics().pageReadCount).register(registry);
+        Gauge.builder("engine.cache.hit_rate",  engine, e -> e.getMetrics().cache().hitRate()).register(registry);
+        Gauge.builder("engine.cache.size",      engine, e -> e.getMetrics().cache().cacheSize()).register(registry);
+        Gauge.builder("engine.disk.read_count", engine, e -> e.getMetrics().disk().pageReadCount()).register(registry);
         // ...
     };
 }
@@ -136,7 +142,7 @@ MeterBinder engineMetrics(SpatialCacheEngine<?> engine) {
   snapshot()은 각 AtomicLong을 순차적으로 읽는다.
   두 값을 읽는 사이에 연산이 끼어들 수 있어 완전한 일관성은 보장하지 않는다.
   → Prometheus scrape 간격(15s) 수준에서는 허용 범위
-  → pageHitRate처럼 단일 메서드에서 계산된 값은 동일 시점 기준으로 계산됨
+  → hitRate()처럼 한 record 안의 값으로 계산되는 비율은 같은 시점 기준이다
 
 JVM 프로세스 종료 = 카운터 초기화
   → 재시작 시 0부터 다시 집계
@@ -155,5 +161,5 @@ DiskManager         → EngineMetrics (pageRead/Write)
 CacheManager        → EngineMetrics (flush/flushedPages)
 SpatialRecordManager → EngineMetrics (query/pageIds)
 PageCacheStore      → EngineMetrics (hit/miss/evict)
-SpatialCacheEngine  → EngineMetrics (snapshot 조합)
+SpatialCacheEngine  → EngineMetrics (rebuild 횟수·소요 시간, 예열 실패, snapshot 조합)
 ```

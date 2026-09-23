@@ -2,6 +2,7 @@ package geoindex.api;
 
 import geoindex.cache.CachePolicy;
 import geoindex.cache.PageCacheStore;
+import geoindex.cache.PageResult;
 import geoindex.cache.WarmupStore;
 import geoindex.metric.EngineMetrics;
 import geoindex.metric.MetricsSnapshot;
@@ -186,8 +187,11 @@ public class SpatialCacheEngine<T> {
      * AbstractSpatialCacheEngine.rebuild 가 이어서 한다.
      */
     public void rebuild(Consumer<SpatialRecordManager> loader) {
+        long start = System.nanoTime();
         spatialRecordManager.rebuild(loader);    // 파일 재구축 + atomic rename
         clearCache();
+        engineMetrics.incrementRebuildCount();
+        engineMetrics.addRebuildMs((System.nanoTime() - start) / 1_000_000);
     }
 
     /**
@@ -218,6 +222,10 @@ public class SpatialCacheEngine<T> {
                         (a, b) -> a,  // 병합 함수 — 키 중복은 없지만 4-인자 시그니처가 요구
                         LinkedHashMap::new  // 인기 순서 유지
                 ));
+    }
+
+    public int getWarmupChunkSize() {
+        return pageCacheStore.getPolicy().getWarmupChunkSize();
     }
 
     /** 접근 횟수를 파일로. 종료 시 한 번 — 다음 기동의 예열 근거가 된다. */
