@@ -45,6 +45,17 @@ class SpatialRecordManagerTest {
         Files.deleteIfExists(Path.of(TEST_FILE));
     }
 
+    /**
+     * 손상 상태를 직접 만드는 테스트들이 쓰는 헬퍼. SpatialRecordManager 는 셀 번호를 받아
+     * 내부에서 pageId 로 바꾸므로, 페이지를 직접 건드리려면 같은 변환이 필요하다.
+     * SEQ_BITS 는 그쪽 private 상수라 여기서 값을 맞춰 둔다 — 한쪽만 바뀌면 이 테스트들이 깨진다.
+     */
+    static final int SEQ_BITS = 10;
+
+    static long primaryPageId(double lat, double lng) {
+        return new GeoHashIndex().toPageId(lat, lng) << SEQ_BITS;
+    }
+
     @Test
     void testSearchRadiusEmpty() {
         List<byte[]> results = manager.searchRadius(37.4979, 127.0276, 5.0);
@@ -197,14 +208,15 @@ class SpatialRecordManagerTest {
         manager.put(lat, lng, "B0001".getBytes());
         cacheManager.flush();
 
-        long pageId = new GeoHashIndex().toPageId(lat, lng);
-        Page page = cacheManager.getOrCreatePage(pageId);
-        PageLayout.setOverflowPageId(page, 999_999_999);   // 아무도 쓴 적 없는 pageId
+        long cell = new GeoHashIndex().toPageId(lat, lng);
+        long pageId = primaryPageId(lat, lng);
+        // 다음 칸이 있다고 표시만 하고 그 페이지는 만들지 않는다 — 체인 중간이 사라진 파일
+        PageLayout.setHasOverflow(cacheManager.getOrCreatePage(pageId));
         cacheManager.flush();
         cacheManager.clearCache();                          // findPage 가 null 을 돌려주게
 
         CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
-                () -> manager.getAllCodesByPageId(pageId));
+                () -> manager.getAllCodesByPageId(cell));
         assertEquals(pageId, e.getPageId(), "손상된 체인의 primary 를 담아야 한다");
     }
 
@@ -219,39 +231,49 @@ class SpatialRecordManagerTest {
         double lat = 37.4979, lng = 127.0276;
         manager.put(lat, lng, "B0001".getBytes());
 
-        long pageId = new GeoHashIndex().toPageId(lat, lng);
-        long emptyPageId = pageId + 1;
-        cacheManager.getOrCreatePage(emptyPageId);          // 초기화되지 않은 채 캐시에만 존재
-
-        Page page = cacheManager.getOrCreatePage(pageId);
-        PageLayout.setOverflowPageId(page, emptyPageId);
+        long cell = new GeoHashIndex().toPageId(lat, lng);
+        long pageId = primaryPageId(lat, lng);
+        cacheManager.getOrCreatePage(pageId + 1);           // 초기화되지 않은 채 캐시에만 존재
+        PageLayout.setHasOverflow(cacheManager.getOrCreatePage(pageId));
 
         CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
-                () -> manager.getAllCodesByPageId(pageId));
+                () -> manager.getAllCodesByPageId(cell));
         assertEquals(pageId, e.getPageId());
     }
 
     /**
-     * 체인에 사이클이 있으면 던진다.
+     * 체인이 자기 셀을 벗어나면 던진다.
      *
-     * 홉 상한이 없으면 while 이 영원히 끝나지 않는다. 결과가 틀리는 다른 손상과 달리
-     * 요청 스레드가 묶여, 같은 칸으로 요청이 반복되면 스레드 풀이 고갈된다.
+     * pageId 는 상위 비트가 셀, 하위 SEQ_BITS 가 체인 순번이다. 순번이 꽉 찬 페이지에
+     * "다음 칸이 있다" 표시가 남아 있으면 다음 번호가 옆 셀의 primary 가 된다 — 순회를
+     * 계속하면 남의 셀 레코드를 이 셀의 결과에 담는다.
      *
-     * 레코드를 1건만 두는 이유: 상한(OVERFLOW_PAGES)까지 도는 동안 페이지의 레코드가
-     * 매 바퀴 누적된다. 페이지가 꽉 차 있으면 수백만 건이 쌓인다.
+     * 사이클 테스트를 대신한다. 번호가 계산식(다음 = 현재 + 1)이 된 뒤로는 뒤를 가리키는
+     * 링크를 만들 수 없어 사이클 자체가 생기지 않는다.
      */
     @Test
-    void 체인에_사이클이_있으면_예외() {
+    void 체인이_셀_경계를_넘으면_예외() {
         double lat = 37.4979, lng = 127.0276;
-        manager.put(lat, lng, "B0001".getBytes());
+        byte[] onePerPage = new byte[PageLayout.MAX_RECORD_SIZE];   // 한 장에 한 건만 들어간다
+        long maxChain = (1L << SEQ_BITS) - 1;
 
-        long pageId = new GeoHashIndex().toPageId(lat, lng);
-        Page page = cacheManager.getOrCreatePage(pageId);
-        PageLayout.setOverflowPageId(page, pageId);         // 자기 자신을 가리킨다
+        for (int i = 0; i <= maxChain; i++) manager.put(lat, lng, onePerPage);
 
+        long cell = new GeoHashIndex().toPageId(lat, lng);
+        long lastInCell = primaryPageId(lat, lng) | maxChain;
+
+        // 한 번 더 넣으면 쓰기 쪽 가드가 막는다
+        IllegalStateException w = assertThrows(IllegalStateException.class,
+                () -> manager.put(lat, lng, onePerPage));
+        assertTrue(w.getMessage().contains("overflow chain full"), w.getMessage());
+        assertFalse(PageLayout.hasOverflow(cacheManager.getOrCreatePage(lastInCell)),
+                "막힌 put 은 마지막 칸에 링크를 남기지 않아야 한다");
+
+        // 그 표시가 손상으로 남아 있으면 읽기 쪽 가드가 막는다
+        PageLayout.setHasOverflow(cacheManager.getOrCreatePage(lastInCell));
         CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
-                () -> manager.getAllCodesByPageId(pageId));
-        assertTrue(e.getMessage().contains("hops"), "사이클 메시지여야 한다: " + e.getMessage());
+                () -> manager.getAllCodesByPageId(cell));
+        assertTrue(e.getMessage().contains("past its cell"), e.getMessage());
     }
 
     /**
@@ -265,11 +287,12 @@ class SpatialRecordManagerTest {
      */
     @Test
     void primary가_초기화되지_않았으면_예외() {
-        long pageId = new GeoHashIndex().toPageId(37.4979, 127.0276);
+        long cell = new GeoHashIndex().toPageId(37.4979, 127.0276);
+        long pageId = primaryPageId(37.4979, 127.0276);
         cacheManager.getOrCreatePage(pageId);               // 초기화 전 상태
 
         CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
-                () -> manager.getAllCodesByPageId(pageId));
+                () -> manager.getAllCodesByPageId(cell));
         assertEquals(pageId, e.getPageId());
     }
 
@@ -280,10 +303,9 @@ class SpatialRecordManagerTest {
     /**
      * 한 페이지에 담을 수 없는 값은 진입점에서 막는다.
      *
-     * 막지 않으면 writeRecord 가 빈 페이지에서도 계속 -1 을 반환하고,
-     * writeWithOverflow 가 overflow 를 하나씩 달며 무한히 돈다. 풀(40,960장)을
-     * 다 태운 뒤에야 죽고, free list 에 반납 경로가 없어 rebuild 전까지 회복되지 않는다.
-     * put 한 번이 엔진 전체를 못 쓰게 만드는 셈이다.
+     * 막지 않으면 writeRecord 가 빈 페이지에서도 계속 -1 을 반환하고, writeWithOverflow 가
+     * 칸을 하나씩 달며 셀 경계까지 돈다. 그 셀의 체인이 통째로 낭비되고, 회수 경로가 없어
+     * rebuild 전까지 회복되지 않는다. put 한 번이 그 지역을 못 쓰게 만드는 셈이다.
      */
     @Test
     void 페이지에_담을_수_없는_크기는_거부한다() {
@@ -294,9 +316,9 @@ class SpatialRecordManagerTest {
         assertTrue(e.getMessage().contains("record too large"), e.getMessage());
     }
 
-    /** 막는 것과 별개로, overflow 풀이 손상되지 않았는지 본다 — 이 검사의 실제 목적이다. */
+    /** 막는 것과 별개로, 체인이 손상되지 않았는지 본다 — 이 검사의 실제 목적이다. */
     @Test
-    void 크기_초과가_overflow_풀을_소진하지_않는다() {
+    void 크기_초과가_체인을_늘리지_않는다() {
         byte[] tooLarge = new byte[PageLayout.MAX_RECORD_SIZE + 1];
 
         assertThrows(IllegalArgumentException.class,
