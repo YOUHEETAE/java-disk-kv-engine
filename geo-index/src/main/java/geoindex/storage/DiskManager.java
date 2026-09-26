@@ -32,7 +32,7 @@ import java.util.logging.Logger;
 public class DiskManager {
 
     private static final int MAX_ENTRIES  = 100_000;       // 담을 수 있는 최대 페이지 수 = 매핑 테이블 칸 수
-    private static final int ENTRY_SIZE   = 12;            // 매핑 엔트리 하나 = pageId(4) + offset(8)
+    private static final int ENTRY_SIZE   = 16;            // 매핑 엔트리 하나 = pageId(8) + offset(8)
     private static final int COUNT_OFFSET = 0;             // entryCount 위치
     private static final int MAP_OFFSET   = 4;             // 매핑 테이블 시작
     private static final long DATA_OFFSET =                // 페이지 데이터 시작
@@ -41,7 +41,7 @@ public class DiskManager {
 
     private RandomAccessFile dbFile;
     private final String filePath;
-    private final Map<Integer, Long> pageMap  = new HashMap<>();
+    private final Map<Long, Long> pageMap  = new HashMap<>();
     private int entryCount = 0;
     private long nextDataOffset = DATA_OFFSET;
 
@@ -71,7 +71,7 @@ public class DiskManager {
 
         for (int i = 0; i < entryCount; i++) {
             dbFile.seek(MAP_OFFSET + (long) i * ENTRY_SIZE);
-            int pageId = dbFile.readInt();
+            long pageId = dbFile.readLong();
             long offset = dbFile.readLong();
             pageMap.put(pageId, offset);
         }
@@ -92,7 +92,7 @@ public class DiskManager {
      * seek 과 readFully 사이에 다른 스레드가 seek 하면 그 위치를 읽어버린다.
      * 두 호출이 한 덩어리로 묶여야 한다.
      */
-    public synchronized Page loadPage(int pageId) {
+    public synchronized Page loadPage(long pageId) {
         Long offset = pageMap.get(pageId);
         if (offset == null) return null;
         engineMetrics.incrementPageReadCount();
@@ -118,7 +118,7 @@ public class DiskManager {
     public synchronized void savePage(Page page) {
         engineMetrics.incrementPageWriteCount();
         try {
-            int pageId = page.getPageId();
+            long pageId = page.getPageId();
             Long offset = pageMap.get(pageId);
 
             if (offset == null) {
@@ -131,7 +131,7 @@ public class DiskManager {
 
                 // 헤더에 새 엔트리 추가
                 dbFile.seek(MAP_OFFSET + (long) entryCount * ENTRY_SIZE);
-                dbFile.writeInt(pageId);
+                dbFile.writeLong(pageId);
                 dbFile.writeLong(offset);
 
                 entryCount++;

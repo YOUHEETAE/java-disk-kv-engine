@@ -8,8 +8,8 @@ import java.util.List;
  * 4KB 페이지 안쪽의 주소 체계 — Slotted Page 구조.
  *
  * 페이지 배치
- *   [0 ~ 15]    헤더 — recordCount(4) · freeSpaceStart(4) · magic(4) · overflowPageId(4)
- *   [16 ~ ]     슬롯 디렉토리 — 앞에서 뒤로 자란다. 슬롯 하나가 offset(4) + length(4)
+ *   [0 ~ 20]    헤더 — recordCount(4) · freeSpaceStart(4) · magic(4) · overflowPageId(8)
+ *   [20 ~ ]     슬롯 디렉토리 — 앞에서 뒤로 자란다. 슬롯 하나가 offset(4) + length(4)
  *   [ ~ 4095]   레코드 — 뒤에서 앞으로 자란다. 레코드 하나가 valueLength(4) + value
  *
  * 슬롯과 레코드가 반대 방향으로 자라는 이유:
@@ -29,10 +29,10 @@ public class PageLayout {
     public static final int OFFSET_FREE_SPACE   = 4;    // 레코드가 뒤에서 자라며 내려온 경계
     public static final int OFFSET_MAGIC        = 8;    // 0xCAFEBABE — 초기화 여부 판별
     public static final int OFFSET_OVERFLOW     = 12;   // 다음 overflow 페이지 번호
-    public static final int HEADER_SIZE         = 16;
+    public static final int HEADER_SIZE         = 20;
     public static final int SLOT_SIZE           = 8;    // offset(4) + length(4)
 
-    /** 한 페이지에 담을 수 있는 최대 value 크기. 4096 - 헤더 16 - 슬롯 8 - 길이 4 */
+    /** 한 페이지에 담을 수 있는 최대 value 크기. 4096 - 헤더 20 - 슬롯 8 - 길이 4 */
     public static final int MAX_RECORD_SIZE = Page.PAGE_SIZE - HEADER_SIZE - SLOT_SIZE - 4;
 
     /** overflowPageId 가 이 값이면 체인의 끝이다. */
@@ -130,8 +130,8 @@ public class PageLayout {
         return records;
     }
 
-    public static int getOverflowPageId(Page page) {
-        return page.buffer().getInt(OFFSET_OVERFLOW);
+    public static long getOverflowPageId(Page page) {
+        return page.buffer().getLong(OFFSET_OVERFLOW);
     }
 
     /**
@@ -141,8 +141,8 @@ public class PageLayout {
      * 이 호출이 유일한 변경인 페이지(꽉 차서 writeRecord 가 -1 을 낸 경우)가
      * flush 를 건너뛴다.
      */
-    public static void setOverflowPageId(Page page, int pageId) {
-        page.buffer().putInt(OFFSET_OVERFLOW, pageId);
+    public static void setOverflowPageId(Page page, long pageId) {
+        page.buffer().putLong(OFFSET_OVERFLOW, pageId);
         page.markDirty();
     }
 

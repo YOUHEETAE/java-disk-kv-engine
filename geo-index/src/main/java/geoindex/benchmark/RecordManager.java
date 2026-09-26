@@ -42,12 +42,12 @@ public class RecordManager {
         index.put(key, writeWithOverflow(pageId, page, value));
     }
 
-    private RecordId writeWithOverflow(int pageId, Page page, byte[] value) {
+    private RecordId writeWithOverflow(long pageId, Page page, byte[] value) {
         int slotId = PageLayout.writeRecord(page, value);
 
         if(slotId != -1) return new RecordId(pageId, slotId);
 
-        int overflowPageId = PageLayout.getOverflowPageId(page);
+        long overflowPageId = PageLayout.getOverflowPageId(page);
         if (overflowPageId == PageLayout.NO_OVERFLOW) {
             overflowPageId = allocateNewPage();
             PageLayout.setOverflowPageId(page, overflowPageId);

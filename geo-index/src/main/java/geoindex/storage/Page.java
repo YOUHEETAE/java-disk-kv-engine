@@ -21,7 +21,7 @@ public class Page {
      * 너무 크면 불필요한 i/o비용이 증가한다. (savePage 는 항상 페이지 전체를 쓴다)
      */
     public static final int PAGE_SIZE = 4096;
-    private final int pageId;
+    private final long pageId;
     private final byte[] data;
     /**
      * Write-Back 에서 "디스크에 반영해야 함"을 나타내는 유일한 신호.
@@ -31,7 +31,7 @@ public class Page {
      */
     private volatile boolean dirty;
 
-    public Page(int pageId) {
+    public Page(long pageId) {
         this.pageId = pageId;
         this.data = new byte[PAGE_SIZE];
         this.dirty = false;
@@ -39,7 +39,7 @@ public class Page {
         this.buffer = ByteBuffer.wrap(this.data);
     };
 
-    public int getPageId(){
+    public long getPageId(){
         return pageId;
     }
 

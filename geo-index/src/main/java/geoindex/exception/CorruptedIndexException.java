@@ -12,14 +12,14 @@ package geoindex.exception;
  */
 public class CorruptedIndexException extends RuntimeException {
 
-    private final int pageId;
+    private final long pageId;
 
-    public CorruptedIndexException(String message, int pageId) {
+    public CorruptedIndexException(String message, long pageId) {
         super(message);
         this.pageId = pageId;
     }
 
-    public int getPageId() {
+    public long getPageId() {
         return pageId;
     }
 }

@@ -39,7 +39,7 @@ public class SpatialRecordManager {
     private final SpatialIndex spatialIndex;
     private final EngineMetrics engineMetrics;
     private ConcurrentLinkedDeque<Integer> overflowFreeList;
-    private final ConcurrentHashMap<Integer, ReentrantReadWriteLock> pageLocks;
+    private final ConcurrentHashMap<Long, ReentrantReadWriteLock> pageLocks;
 
     public SpatialRecordManager(CacheManager cacheManager, SpatialIndex spatialIndex,  EngineMetrics engineMetrics) {
         this.cacheManager = cacheManager;
@@ -60,7 +60,7 @@ public class SpatialRecordManager {
      * 락 객체가 하나씩 생기고, 이 맵을 비우는 곳은 rebuild 뿐이다 —
      * 읽기 경로가 존재 확인을 이 호출보다 먼저 하는 이유다.
      */
-    private ReentrantReadWriteLock getLock(int pageId) {
+    private ReentrantReadWriteLock getLock(long pageId) {
         return pageLocks.computeIfAbsent(pageId, k -> new ReentrantReadWriteLock());
     }
 
@@ -69,7 +69,7 @@ public class SpatialRecordManager {
             throw new IllegalArgumentException(
                     "record too large: " + value.length + " > " + PageLayout.MAX_RECORD_SIZE);
         }
-        int pageId = spatialIndex.toPageId(lat, lng);
+        long pageId = spatialIndex.toPageId(lat, lng);
         writeWithOverflow(pageId, value);
     }
 
@@ -88,7 +88,7 @@ public class SpatialRecordManager {
      * rebuild 적재 중에는 savePage 가 flush 때 한 번에 돌아 pageMap 이 계속 비어
      * 있으므로 디스크는 읽지 않는다. flush 뒤에 put 이 오면 락 안에서 읽는다.
      */
-    private void writeWithOverflow(int primaryPageId, byte[] value) {
+    private void writeWithOverflow(long primaryPageId, byte[] value) {
         ReentrantReadWriteLock.WriteLock writeLock = getLock(primaryPageId).writeLock();
         writeLock.lock();
         try {
@@ -104,7 +104,7 @@ public class SpatialRecordManager {
                     return;
                 }
 
-                int overflowPageId = PageLayout.getOverflowPageId(current);
+                long overflowPageId = PageLayout.getOverflowPageId(current);
                 if (overflowPageId == PageLayout.NO_OVERFLOW) {
                     overflowPageId = allocateOverflowPage();
                     PageLayout.setOverflowPageId(current, overflowPageId);
@@ -146,12 +146,12 @@ public class SpatialRecordManager {
     }
 
     /** 운영 진입점. SpatialCacheEngine 이 부르는 것은 이 하나뿐이다. */
-    public Map<Integer, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
+    public Map<Long, List<String>> searchRadiusCodesByPageId(double lat, double lng, double radiusKm) {
         engineMetrics.incrementQueryCount();
-        List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
-        Map<Integer, List<String>> result = new LinkedHashMap<>();
+        List<Long> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
+        Map<Long, List<String>> result = new LinkedHashMap<>();
 
-        for (int pageId : pageIds) {
+        for (long pageId : pageIds) {
             List<String> codes = readAllCodesFromChain(pageId);
             if (!codes.isEmpty()) result.put(pageId, codes);
         }
@@ -160,7 +160,7 @@ public class SpatialRecordManager {
     }
 
     /** pageId 를 이미 아는 경우. 워밍업과 테스트가 쓴다. */
-    public List<String> getAllCodesByPageId(int pageId) {
+    public List<String> getAllCodesByPageId(long pageId) {
         return readAllCodesFromChain(pageId);
     }
 
@@ -169,10 +169,10 @@ public class SpatialRecordManager {
      * 레코드를 복원해야 해서 원본 바이트가 필요하다. 그래서 이 메서드만 반환 타입이 다르다.
      */
     public List<byte[]> searchRadius(double lat, double lng, double radiusKm) {
-        List<Integer> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
+        List<Long> pageIds = spatialIndex.getPageIds(lat, lng, radiusKm);
         List<byte[]> results = new ArrayList<>();
 
-        for (int pageId : pageIds) {
+        for (long pageId : pageIds) {
             results.addAll(readAllRecordsFromChain(pageId));
         }
         return results;
@@ -187,7 +187,7 @@ public class SpatialRecordManager {
     }
 
     /** 체인의 레코드를 병원 코드 문자열로 바꾼다. 순회는 readAllRecordsFromChain 이 한다. */
-    private List<String> readAllCodesFromChain(int pageId) {
+    private List<String> readAllCodesFromChain(long pageId) {
         List<byte[]> records = readAllRecordsFromChain(pageId);
         List<String> codes = new ArrayList<>(records.size());
         for (byte[] record : records) {
@@ -205,7 +205,7 @@ public class SpatialRecordManager {
      * primary 락 하나가 체인 전체를 보호한다. 읽기든 쓰기든 반드시 primary 를 거쳐
      * 체인에 들어오므로, overflow 페이지는 자기 락을 따로 잡지 않는다.
      */
-    private List<byte[]> readAllRecordsFromChain(int pageId) {
+    private List<byte[]> readAllRecordsFromChain(long pageId) {
         Page page = cacheManager.findPage(pageId);
         if (page == null) return Collections.emptyList();
 
@@ -219,7 +219,7 @@ public class SpatialRecordManager {
 
             List<byte[]> records = new ArrayList<>(PageLayout.readAllRecords(page));
 
-            int overflowPageId = PageLayout.getOverflowPageId(page);
+            long overflowPageId = PageLayout.getOverflowPageId(page);
             int hops = 0;
             while (overflowPageId != PageLayout.NO_OVERFLOW) {
                 if (++hops > OVERFLOW_PAGES) {

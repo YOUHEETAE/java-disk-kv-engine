@@ -40,7 +40,7 @@ public class SpatialCacheEngine<T> {
     private final WarmupStore warmupStore;
 
     /** pageId → 그 페이지를 지금 로드 중인 스레드의 약속. 값이 아니라 약속을 담는다. */
-    private final ConcurrentHashMap<Integer, CompletableFuture<List<T>>> pendingLoads = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, CompletableFuture<List<T>>> pendingLoads = new ConcurrentHashMap<>();
 
     /**
      * 캐시를 비울 때마다 1 오른다. 비우기 전에 시작된 로딩이 뒤늦게 도착해
@@ -63,7 +63,7 @@ public class SpatialCacheEngine<T> {
      * 중이다" 셋 중 하나이고 PageLoadState 가 그 분류를 든다.
      */
     public List<T> search (double lat, double lng, double radiusKm, Function<List<String>, Map<String, T>> batchLoader) {
-        Map<Integer, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
+        Map<Long, List<String>> codesByPageId = spatialRecordManager.searchRadiusCodesByPageId(lat, lng, radiusKm);
 
         PageLoadState<T> state = new PageLoadState<>();
 
@@ -78,9 +78,9 @@ public class SpatialCacheEngine<T> {
     }
 
     /** 페이지마다 캐시를 판정하고, 미스면 pendingLoads 에서 로드 권한을 겨룬다. */
-    private void classifyPageStates(Map<Integer, List<String>> codesByPageId, PageLoadState<T> state) {
-        for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
-            int pageId = entry.getKey();
+    private void classifyPageStates(Map<Long, List<String>> codesByPageId, PageLoadState<T> state) {
+        for(Map.Entry<Long, List<String>> entry : codesByPageId.entrySet()){
+            long pageId = entry.getKey();
             List<String> codes = entry.getValue();
 
             PageResult<T> result = pageCacheStore.getOrMiss(pageId, codes);
@@ -106,7 +106,7 @@ public class SpatialCacheEngine<T> {
      * 로딩을 끝내고 캐시를 채웠을 수 있다 — 그 틈을 안 보면 방금 들어온 값을 두고 DB 를
      * 또 친다. 이미 있으면 future 를 바로 완료시켜 뒤따라온 대기자도 풀어준다.
      */
-    private void recheckAndClassify(int pageId,
+    private void recheckAndClassify(long pageId,
                                    List<String> codes,
                                    PageLoadState<T> state,
                                    CompletableFuture<List<T>> future){
@@ -162,11 +162,11 @@ public class SpatialCacheEngine<T> {
     }
 
     /** 인덱스가 준 페이지 순서대로 결과를 잇는다. 남이 로드 중인 페이지는 여기서만 기다린다. */
-    private List<T> assembleResults(Map<Integer, List<String>> codesByPageId, PageLoadState<T> state) {
+    private List<T> assembleResults(Map<Long, List<String>> codesByPageId, PageLoadState<T> state) {
         List<T> result = new ArrayList<>();
 
-        for(Map.Entry<Integer, List<String>> entry : codesByPageId.entrySet()){
-            int pageId = entry.getKey();
+        for(Map.Entry<Long, List<String>> entry : codesByPageId.entrySet()){
+            long pageId = entry.getKey();
 
             if(state.hasReadyPage(pageId)){
                 result.addAll(state.getReadyPage(pageId));
@@ -178,7 +178,7 @@ public class SpatialCacheEngine<T> {
     }
 
     /** 예열이 DB 에서 가져온 값을 넣는 통로. search 는 자기 loadPages 안에서 직접 넣는다. */
-    public void putCache(int pageId, List<T> data) {
+    public void putCache(long pageId, List<T> data) {
         pageCacheStore.put(pageId, data);
     }
 
@@ -211,7 +211,7 @@ public class SpatialCacheEngine<T> {
      * 몇 개를 줄지는 정책이 정한다. warmupSize 가 상한이고, maxSize 가 켜져 있으면 그 이하로
      * 한 번 더 자른다 — 캐시에 못 들어갈 것을 DB 에서 가져올 이유가 없다.
      */
-    public Map<Integer, List<String>> getWarmupTargets() {
+    public Map<Long, List<String>> getWarmupTargets() {
         CachePolicy policy = pageCacheStore.getPolicy();
         int wanted = policy.isWarmupAll() ? Integer.MAX_VALUE : policy.getWarmupSize();
         int limit = policy.isMaxSizeEnabled() ? Math.min(wanted, policy.getMaxSize()) : wanted;
@@ -253,7 +253,7 @@ public class SpatialCacheEngine<T> {
      * access-order 에서는 이 호출도 접근으로 세어 LRU 순서를 바꾼다 — 축출 순서를 확인하는
      * 테스트에서는 이 메서드 대신 getCacheSize 를 쓸 것.
      */
-    public boolean isCached(int pageId) {
+    public boolean isCached(long pageId) {
         return  pageCacheStore.isCached(pageId);
     }
 

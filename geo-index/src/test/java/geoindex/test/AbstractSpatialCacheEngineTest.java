@@ -79,7 +79,7 @@ class AbstractSpatialCacheEngineTest {
         recordManager.put(37.4979, 127.0276, "OLD".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
-        int pageId = index.toPageId(37.4979, 127.0276);
+        long pageId = index.toPageId(37.4979, 127.0276);
         service.search(37.4979, 127.0276, 1.0);            // 접근 기록 → 예열 대상이 생긴다
 
         RuntimeException dbDown = new RuntimeException("db down");
@@ -111,7 +111,7 @@ class AbstractSpatialCacheEngineTest {
     void 예열은_인기_순서대로_채워_maxSize에_걸리면_하위가_밀려난다() throws Exception {
         // 서로 다른 페이지 셋 — 강남 · 시청 · 잠실
         double[][] spots = { {37.4979, 127.0276}, {37.5665, 126.9780}, {37.5133, 127.1001} };
-        int[] pageIds = new int[3];
+        long[] pageIds = new long[3];
         for (int i = 0; i < 3; i++) {
             recordManager.put(spots[i][0], spots[i][1], ("P" + i).getBytes());
             pageIds[i] = index.toPageId(spots[i][0], spots[i][1]);
@@ -159,7 +159,7 @@ class AbstractSpatialCacheEngineTest {
     @Test
     void warmupSize가_상위_n개를_자르고_WARMUP_ALL은_기록_전부를_예열한다() {
         double[][] spots = { {37.4979, 127.0276}, {37.5665, 126.9780}, {37.5133, 127.1001} };
-        int[] pageIds = new int[3];
+        long[] pageIds = new long[3];
         for (int i = 0; i < 3; i++) {
             recordManager.put(spots[i][0], spots[i][1], ("P" + i).getBytes());
             pageIds[i] = index.toPageId(spots[i][0], spots[i][1]);
@@ -197,7 +197,7 @@ class AbstractSpatialCacheEngineTest {
         recordManager.put(37.4979, 127.0276, "OLD".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
-        int pageId = index.toPageId(37.4979, 127.0276);
+        long pageId = index.toPageId(37.4979, 127.0276);
         service.search(37.4979, 127.0276, 1.0);
 
         assertDoesNotThrow(() -> service.rebuild(loader -> loader.put(37.4979, 127.0276, "NEW")));
@@ -219,7 +219,7 @@ class AbstractSpatialCacheEngineTest {
         }
         cacheManager.flush();
         cacheManager.clearCache();
-        int pageId = index.toPageId(37.4979, 127.0276);
+        long pageId = index.toPageId(37.4979, 127.0276);
 
         WarmupStore store = new WarmupStore(Path.of(WARMUP_FILE));
         store.recordAccess(pageId);

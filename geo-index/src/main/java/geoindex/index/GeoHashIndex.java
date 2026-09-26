@@ -27,8 +27,8 @@ public class GeoHashIndex implements SpatialIndex {
     private static final long MAX_GRID_INDEX = (1L << BITS_PER_AXIS) - 1;   // 클램핑용
 
     @Override
-    public int toPageId(double lat, double lng) {
-        return (int) GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
+    public long toPageId(double lat, double lng) {
+        return GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
     }
 
     /**
@@ -40,7 +40,7 @@ public class GeoHashIndex implements SpatialIndex {
      * 격자 순회 순서는 Morton 인터리빙 때문에 오름차순이 아니라 정렬이 따로 필요하다.
      */
     @Override
-    public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
+    public List<Long> getPageIds(double lat, double lng, double radiusKm) {
         double deltaDegreeY = radiusKm / 110.0;
         double kmPerDegreeLon = 111.32 * Math.cos(Math.toRadians(lat));
         double deltaDegreeX = radiusKm / kmPerDegreeLon;
@@ -69,11 +69,11 @@ public class GeoHashIndex implements SpatialIndex {
         long minLngBits = Math.max(0, lngToBits(minLng) - 1);
         long maxLngBits = Math.min(MAX_GRID_INDEX, lngToBits(maxLng) + 1);
 
-        List<Integer> pageIds = new ArrayList<>();
+        List<Long> pageIds = new ArrayList<>();
         for (long latBits = minLatBits; latBits <= maxLatBits; latBits++) {
             for (long lngBits = minLngBits; lngBits <= maxLngBits; lngBits++) {
                 long morton = GeoHash.interleave(lngBits, latBits, BITS_PER_AXIS);
-                pageIds.add((int) morton);
+                pageIds.add(morton);
             }
         }
         Collections.sort(pageIds);

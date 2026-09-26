@@ -72,7 +72,7 @@ public abstract class AbstractSpatialCacheEngine<T> {
      * 첫 축출에서 가장 인기 없는 것이 나간다.
      */
     public void warmup() {
-        Map<Integer, List<String>> targets = spatialCacheEngine.getWarmupTargets();
+        Map<Long, List<String>> targets = spatialCacheEngine.getWarmupTargets();
         List<String> allCodes = targets.values().stream()
                 .flatMap(Collection::stream)
                 .collect(Collectors.toList());
@@ -84,7 +84,7 @@ public abstract class AbstractSpatialCacheEngine<T> {
             byCode.putAll(loadByCodes(chunk));
         }
 
-        List<Map.Entry<Integer, List<T>>> prepared = new ArrayList<>();
+        List<Map.Entry<Long, List<T>>> prepared = new ArrayList<>();
         targets.forEach((pageId, codes) -> {
             List<T> data = codes.stream()
                     .map(byCode::get)

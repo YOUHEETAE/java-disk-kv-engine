@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * flush 는 put 과 겹치지 않게 불린다는 전제 위에 있다.
  */
 public class CacheManager {
-    private final ConcurrentHashMap<Integer, Page> cache;
+    private final ConcurrentHashMap<Long, Page> cache;
     private final DiskManager diskManager;
     private final EngineMetrics engineMetrics;
     public CacheManager(DiskManager diskManager, EngineMetrics engineMetrics) {
@@ -46,7 +46,7 @@ public class CacheManager {
      * computeIfAbsent 는 매핑 함수가 null 을 반환하면 저장하지 않고 null 을 돌려준다.
      * "없으면 캐시에 넣지 않는다"가 별도 분기 없이 성립하는 이유다.
      */
-    public Page findPage(int pageId) {
+    public Page findPage(long pageId) {
         return cache.computeIfAbsent(pageId, diskManager::loadPage);
     }
 
@@ -58,7 +58,7 @@ public class CacheManager {
      * initializePage 가 recordCount 를 0 으로 되돌리고 flush 가 그대로 파일에 써서,
      * 기존 레코드가 예외 없이 사라진다.
      */
-    public Page getOrCreatePage(int pageId){
+    public Page getOrCreatePage(long pageId){
         return cache.computeIfAbsent(pageId, id -> {
             Page page = diskManager.loadPage(id);
             return page != null ? page : new Page(id);
@@ -77,7 +77,7 @@ public class CacheManager {
     public void flush() {
         engineMetrics.incrementFlushCount();
         List<Page> pages = new ArrayList<>(cache.values());
-        pages.sort(Comparator.comparingInt(Page::getPageId));
+        pages.sort(Comparator.comparingLong(Page::getPageId));
         for (Page page : pages) {
             // 락 없이 쓴다. 쓰기 경로가 잡는 것은 SpatialRecordManager 의 pageLocks(RWLock)라
             // 여기서 page 객체를 잠가도 상호배제가 성립하지 않는다 — 같은 락 객체를 잡아야 한다.

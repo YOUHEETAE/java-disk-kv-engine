@@ -1,14 +1,14 @@
 package geoindex.benchmark;
 
 public class RecordId {
-    private final int pageId;
+    private final long pageId;
     private final int slotId;
 
-    public RecordId(int pageId, int slotId) {
+    public RecordId(long pageId, int slotId) {
         this.pageId = pageId;
         this.slotId = slotId;
     }
-    public int getPageId() {
+    public long getPageId() {
         return pageId;
     }
     public int getSlotId() {
@@ -29,6 +29,6 @@ public class RecordId {
 
     @Override
     public int hashCode() {
-        return 31 * pageId + slotId;
+        return 31 * Long.hashCode(pageId) + slotId;
     }
 }

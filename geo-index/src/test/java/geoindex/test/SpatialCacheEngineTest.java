@@ -145,7 +145,7 @@ class SpatialCacheEngineTest {
         cacheManager.clearCache();
 
         // put → HIT
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
         ttlEngine.putCache(pageId, List.of("B0001"));
         assertTrue(ttlEngine.isCached(pageId));
 
@@ -160,7 +160,7 @@ class SpatialCacheEngineTest {
 
     @Test
     void TTL_DISABLE_만료없음() throws Exception {
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
         engine.putCache(pageId, List.of("B0001"));
 
         Thread.sleep(100);
@@ -179,7 +179,7 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
         engine.putCache(pageId, List.of("B0001"));
         assertTrue(engine.getCacheSize() > 0);
 
@@ -201,7 +201,7 @@ class SpatialCacheEngineTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
         engine.putCache(pageId, List.of("OLD_001"));
 
         // rebuild: 새 데이터로 파일 교체 + JVM 캐시 초기화
@@ -394,7 +394,7 @@ class SpatialCacheEngineTest {
         spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
 
         CountDownLatch insideLoader = new CountDownLatch(1);
         CountDownLatch releaseLoader = new CountDownLatch(1);
@@ -430,7 +430,7 @@ class SpatialCacheEngineTest {
         spatialRecordManager.put(37.4979, 127.0276, "B0001".getBytes());
         cacheManager.flush();
         cacheManager.clearCache();
-        int pageId = geoHashIndex.toPageId(37.4979, 127.0276);
+        long pageId = geoHashIndex.toPageId(37.4979, 127.0276);
 
         CountDownLatch insideLoader = new CountDownLatch(1);
         CountDownLatch releaseLoader = new CountDownLatch(1);

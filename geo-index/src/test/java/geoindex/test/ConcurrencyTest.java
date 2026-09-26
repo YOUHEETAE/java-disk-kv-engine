@@ -59,7 +59,7 @@ public class ConcurrencyTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        int pageId = geoHashIndex.toPageId(LAT, LNG);
+        long pageId = geoHashIndex.toPageId(LAT, LNG);
         int expectedCount = srm.getAllCodesByPageId(pageId).size();
         System.out.println("예상 코드 수: " + expectedCount);
         assertTrue(expectedCount > 0, "데이터가 있어야 한다");
@@ -113,7 +113,7 @@ public class ConcurrencyTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        int pageId = geoHashIndex.toPageId(LAT, LNG);
+        long pageId = geoHashIndex.toPageId(LAT, LNG);
         int expectedCount = srm.getAllCodesByPageId(pageId).size();
         System.out.println("초기 코드 수: " + expectedCount);
 

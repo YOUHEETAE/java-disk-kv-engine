@@ -44,7 +44,7 @@ class DiskManagerTest {
     void testWriteAndReadLargePageId() {
         DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
         try {
-            int largePageId = 60_712_140;
+            long largePageId = 60_712_140;
 
             Page page = new Page(largePageId);
             PageLayout.initializePage(page);
@@ -63,9 +63,9 @@ class DiskManagerTest {
     @Test
     void testFileSizeIsSparse() throws Exception {
         DiskManager dm = new DiskManager(TEST_FILE, new EngineMetrics());
-        int[] pageIds = {60_712_140, 60_712_141, 60_712_200};
+        long[] pageIds = {60_712_140, 60_712_141, 60_712_200};
 
-        for (int pageId : pageIds) {
+        for (long pageId : pageIds) {
             Page page = new Page(pageId);
             PageLayout.initializePage(page);
             dm.savePage(page);
@@ -73,7 +73,8 @@ class DiskManagerTest {
         dm.close();
 
         long fileSize = Files.size(Path.of(TEST_FILE));
-        long dataOffset = 4 + (long) 100_000 * 12; // 1_200_004
+        // 매핑 엔트리가 pageId(8) + offset(8) 이므로 예약 크기도 그만큼이다
+        long dataOffset = 4 + (long) 100_000 * 16; // 1_600_004
         long expectedMax = dataOffset + (long) pageIds.length * Page.PAGE_SIZE;
 
         System.out.println("파일 크기: " + fileSize + " bytes");

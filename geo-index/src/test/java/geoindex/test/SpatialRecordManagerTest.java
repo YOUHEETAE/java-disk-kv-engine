@@ -69,7 +69,7 @@ class SpatialRecordManagerTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        Map<Integer, List<String>> result =
+        Map<Long, List<String>> result =
                 manager.searchRadiusCodesByPageId(37.4979, 127.0276, 5.0);
 
         assertFalse(result.isEmpty());
@@ -90,7 +90,7 @@ class SpatialRecordManagerTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        Map<Integer, List<String>> result =
+        Map<Long, List<String>> result =
                 manager.searchRadiusCodesByPageId(37.4979, 127.0276, 5.0);
 
         // 각 pageId에 codes가 있어야 함
@@ -106,7 +106,7 @@ class SpatialRecordManagerTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        Map<Integer, List<String>> result =
+        Map<Long, List<String>> result =
                 manager.searchRadiusCodesByPageId(37.4979, 127.0276, 5.0);
 
         // 빈 pageId는 포함되면 안 됨
@@ -170,7 +170,7 @@ class SpatialRecordManagerTest {
         cacheManager.flush();
         cacheManager.clearCache();
 
-        Map<Integer, List<String>> result =
+        Map<Long, List<String>> result =
                 manager.searchRadiusCodesByPageId(37.4979, 127.0276, 5.0);
 
         List<String> allCodes = result.values().stream()
@@ -197,7 +197,7 @@ class SpatialRecordManagerTest {
         manager.put(lat, lng, "B0001".getBytes());
         cacheManager.flush();
 
-        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        long pageId = new GeoHashIndex().toPageId(lat, lng);
         Page page = cacheManager.getOrCreatePage(pageId);
         PageLayout.setOverflowPageId(page, 999_999_999);   // 아무도 쓴 적 없는 pageId
         cacheManager.flush();
@@ -219,8 +219,8 @@ class SpatialRecordManagerTest {
         double lat = 37.4979, lng = 127.0276;
         manager.put(lat, lng, "B0001".getBytes());
 
-        int pageId = new GeoHashIndex().toPageId(lat, lng);
-        int emptyPageId = pageId + 1;
+        long pageId = new GeoHashIndex().toPageId(lat, lng);
+        long emptyPageId = pageId + 1;
         cacheManager.getOrCreatePage(emptyPageId);          // 초기화되지 않은 채 캐시에만 존재
 
         Page page = cacheManager.getOrCreatePage(pageId);
@@ -245,7 +245,7 @@ class SpatialRecordManagerTest {
         double lat = 37.4979, lng = 127.0276;
         manager.put(lat, lng, "B0001".getBytes());
 
-        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        long pageId = new GeoHashIndex().toPageId(lat, lng);
         Page page = cacheManager.getOrCreatePage(pageId);
         PageLayout.setOverflowPageId(page, pageId);         // 자기 자신을 가리킨다
 
@@ -265,7 +265,7 @@ class SpatialRecordManagerTest {
      */
     @Test
     void primary가_초기화되지_않았으면_예외() {
-        int pageId = new GeoHashIndex().toPageId(37.4979, 127.0276);
+        long pageId = new GeoHashIndex().toPageId(37.4979, 127.0276);
         cacheManager.getOrCreatePage(pageId);               // 초기화 전 상태
 
         CorruptedIndexException e = assertThrows(CorruptedIndexException.class,
@@ -314,7 +314,7 @@ class SpatialRecordManagerTest {
 
         manager.put(lat, lng, exact);
 
-        int pageId = new GeoHashIndex().toPageId(lat, lng);
+        long pageId = new GeoHashIndex().toPageId(lat, lng);
         assertEquals(1, manager.getAllCodesByPageId(pageId).size());
         assertEquals(0, manager.getUsedOverflowPageCount(), "한 페이지에 들어가야 한다");
     }

@@ -17,29 +17,29 @@ class GeohashIndexTest {
 
     @Test
     void testToPageId() {
-        int pageId = index.toPageId(37.4979, 127.0276);
+        long pageId = index.toPageId(37.4979, 127.0276);
         System.out.println("강남 pageId: " + pageId);
         assertTrue(pageId >= 0);
     }
 
     @Test
     void testSameLocationSamePageId() {
-        int pageId1 = index.toPageId(37.4979, 127.0276);
-        int pageId2 = index.toPageId(37.4979, 127.0276);
+        long pageId1 = index.toPageId(37.4979, 127.0276);
+        long pageId2 = index.toPageId(37.4979, 127.0276);
         assertEquals(pageId1, pageId2);
     }
 
     @Test
     void testGetPageIds() {
-        List<Integer> pageIds = index.getPageIds(37.4979, 127.0276, 5.0);
+        List<Long> pageIds = index.getPageIds(37.4979, 127.0276, 5.0);
         System.out.println("반환 페이지 수: " + pageIds.size());
         assertTrue(pageIds.size() >= 1);
     }
 
     @Test
     void testNearbyLocationSameOrAdjacentPage() {
-        int gangnam = index.toPageId(37.4979, 127.0276);
-        List<Integer> pageIds = index.getPageIds(37.4979, 127.0276, 5.0);
+        long gangnam = index.toPageId(37.4979, 127.0276);
+        List<Long> pageIds = index.getPageIds(37.4979, 127.0276, 5.0);
         assertTrue(pageIds.contains(gangnam));
     }
     /**
