@@ -134,22 +134,32 @@ latToBits 가 내림하므로 MBR 경계가 칸 경계에 걸치면 그 칸이 �
 **현재 구현:**
 
 ```java
-private static final int  BITS_PER_AXIS  = 15;                        // 축당 비트. 16 이상이면 int 를 넘친다
+private static final int  BITS_PER_AXIS  = 15;                        // 축당 비트. 상한은 26
 private static final long MAX_GRID_INDEX = (1L << BITS_PER_AXIS) - 1;  // 클램핑용
 
 // toPageId: Morton 직접 사용
-public int toPageId(double lat, double lng) {
-    return (int) GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
+public long toPageId(double lat, double lng) {
+    return GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
 }
 
 // getPageIds: MBR → 격자 범위(사방 +1, 0~MAX_GRID_INDEX 클램핑) → 전체 순회 → 정렬
-public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
+public List<Long> getPageIds(double lat, double lng, double radiusKm) {
     // km → 도 (위도는 상수, 경도는 cos(lat) 보정)
     // latToBits/lngToBits → min-1 ~ max+1, Math.max(0, …) / Math.min(MAX_GRID_INDEX, …)
-    // 이중 루프 → interleave → (int) morton
+    // 이중 루프 → interleave → morton
     // Collections.sort → 반환
 }
 ```
+
+**상한이 26 인 이유**
+
+`toPageId` 가 돌려주는 것은 격자 셀 번호이고, `SpatialRecordManager` 가 여기에 체인 순번
+`SEQ_BITS`(10비트)를 붙여 pageId 를 만든다. `long` 의 양수 범위가 63비트이므로
+`2 × 26 + 10 = 62` 까지 들어간다. 현재 15 는 축당 30비트를 쓰고 33비트를 남겨 둔 값이다.
+
+**바꾸면 `DiskManager.FORMAT_VERSION` 도 올려야 한다.** 격자 크기는 인덱스 파일에 적히지 않으므로,
+옛 파일을 새 코드로 열면 같은 좌표가 다른 셀 번호가 되어 **예외 없이 빈 결과**가 난다. 버전을 올리면
+기동 때 거부되고 재구축하라는 메시지가 나온다.
 
 ---
 
