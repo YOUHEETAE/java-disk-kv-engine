@@ -19,6 +19,9 @@ public class Page {
      * OS 페이지·파일시스템 블록 크기와 맞춰 경계에 걸친 읽기/쓰기를 피한다.
      * 너무 작으면 페이지 관리 및 오버플로우가 증가하고
      * 너무 크면 불필요한 i/o비용이 증가한다. (savePage 는 항상 페이지 전체를 쓴다)
+     *
+     * 바꾸면 DiskManager.FORMAT_VERSION 도 올려야 한다. 이 값은 파일에 적히지 않으므로,
+     * 옛 파일을 새 코드로 열면 페이지 경계가 어긋난 자리를 읽는다.
      */
     public static final int PAGE_SIZE = 4096;
     private final long pageId;

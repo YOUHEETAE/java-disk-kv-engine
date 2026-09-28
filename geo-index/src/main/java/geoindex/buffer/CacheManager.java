@@ -71,8 +71,13 @@ public class CacheManager {
      * rebuild 에서 파일 배치가 공간 인접성을 따라간다. 해시 순서로 쓰면 인덱스가
      * 만들어낸 인접성이 파일에서 사라져, 반경 쿼리가 파일 전체에 흩어진 seek 이 된다.
      *
-     * 다만 overflow 페이지는 별도 번호 공간(32,768~)이라 자기 primary 와 멀리 떨어진다.
-     * 체인이 있는 칸의 지역성은 이 정렬로 해결되지 않는다.
+     * overflow 페이지도 이 정렬에 함께 올라탄다 — 번호가 primary 에 체인 순번을 더한 값이라
+     * 오름차순이 체인을 자기 primary 바로 뒤에 놓는다. 다만 이 배치가 실제로 seek 을 줄이는지는
+     * 측정하지 않았다: 균등 분포 더미로는 한 칸에 레코드가 몰리지 않아 체인이 생기지 않는다.
+     *
+     * 페이지를 다 쓴 뒤 sealIndex 를 부른다. 색인은 "지금 파일에 든 페이지 목록"이라 배치가
+     * 끝나는 이 지점에서만 정확하고, 그래서 flush 를 통과한 파일은 다시 열 수 있는 상태가 된다.
+     * 이것을 close 에만 두면 flush 로 끝내는 호출자가 미완성 파일을 남긴다.
      */
     public void flush() {
         engineMetrics.incrementFlushCount();
@@ -93,6 +98,7 @@ public class CacheManager {
                 engineMetrics.incrementFlushedPages();
             }
         }
+        diskManager.sealIndex();
     }
 
     public void clearCache() {

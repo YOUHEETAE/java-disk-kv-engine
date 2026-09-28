@@ -17,7 +17,12 @@ public class GeoHashIndex implements SpatialIndex {
 
     /**
      * 축당 비트 수. 격자는 2^15 × 2^15 = 32,768 × 32,768 칸이 된다.
-     * 위경도 합쳐 30비트라 pageId 가 int 범위에 들어간다 — 16 이상이면 넘친다.
+     *
+     * 상한은 26이다. pageId 는 Morton(2 × BITS_PER_AXIS)에 체인 순번 SEQ_BITS(10)를 붙여
+     * 만들고, long 의 양수 범위가 63비트라 2 × 26 + 10 = 62 까지 들어간다.
+     *
+     * 바꾸면 DiskManager.FORMAT_VERSION 도 올려야 한다. 격자 크기는 파일에 적히지 않으므로,
+     * 옛 파일을 새 코드로 열면 같은 좌표가 다른 셀 번호가 되어 예외 없이 빈 결과가 나온다.
      *
      * 이 엔진은 GeoHash 문자열을 만들지 않고 Morton 정수만 만들므로,
      * base32 문자 수를 뜻하는 precision 대신 축당 비트를 직접 쓴다.
