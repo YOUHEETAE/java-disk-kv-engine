@@ -49,7 +49,7 @@ public class WarmupStoreTest {
         latch.await();
         executor.shutdown();
 
-        List<Integer> top = warmupStore.getTopPageIds(1);
+        List<Long> top = warmupStore.getTopPageIds(1);
         assertEquals(1, top.size());
         assertEquals(3766, top.get(0));
         assertEquals(50000L, warmupStore.getHitCount(3766));
@@ -64,7 +64,7 @@ public class WarmupStoreTest {
         warmupStore.recordAccess(4000);
         warmupStore.recordAccess(2500);
 
-        List<Integer> top = warmupStore.getTopPageIds(3);
+        List<Long> top = warmupStore.getTopPageIds(3);
         assertEquals(4000, top.get(0));
         assertEquals(3766, top.get(1));
         assertEquals(2500, top.get(2));
@@ -78,9 +78,9 @@ public class WarmupStoreTest {
         warmupStore.saveHitCounts();
 
         WarmupStore warmupStore2 = new WarmupStore(Path.of(TEST_FILE));
-        List<Integer> top = warmupStore2.getTopPageIds(2);
+        List<Long> top = warmupStore2.getTopPageIds(2);
 
-        assertIterableEquals(List.of(3766, 4000), top);
+        assertIterableEquals(List.of(3766L, 4000L), top);
 
         List<String> lines = Files.readAllLines(Path.of(TEST_FILE));
 
@@ -115,7 +115,7 @@ public class WarmupStoreTest {
     void 파일_없을때_fresh_start() throws InterruptedException {
         WarmupStore warmupStore = new  WarmupStore(Path.of("non_existent.store"));
 
-        List<Integer> top = warmupStore.getTopPageIds(1);
+        List<Long> top = warmupStore.getTopPageIds(1);
         assertTrue(top.isEmpty());
         assertEquals(0, warmupStore.getHitCount(3766));
     }

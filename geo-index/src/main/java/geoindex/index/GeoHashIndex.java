@@ -17,7 +17,12 @@ public class GeoHashIndex implements SpatialIndex {
 
     /**
      * 축당 비트 수. 격자는 2^15 × 2^15 = 32,768 × 32,768 칸이 된다.
-     * 위경도 합쳐 30비트라 pageId 가 int 범위에 들어간다 — 16 이상이면 넘친다.
+     *
+     * 상한은 26이다. pageId 는 Morton(2 × BITS_PER_AXIS)에 체인 순번 SEQ_BITS(10)를 붙여
+     * 만들고, long 의 양수 범위가 63비트라 2 × 26 + 10 = 62 까지 들어간다.
+     *
+     * 바꾸면 DiskManager.FORMAT_VERSION 도 올려야 한다. 격자 크기는 파일에 적히지 않으므로,
+     * 옛 파일을 새 코드로 열면 같은 좌표가 다른 셀 번호가 되어 예외 없이 빈 결과가 나온다.
      *
      * 이 엔진은 GeoHash 문자열을 만들지 않고 Morton 정수만 만들므로,
      * base32 문자 수를 뜻하는 precision 대신 축당 비트를 직접 쓴다.
@@ -27,8 +32,8 @@ public class GeoHashIndex implements SpatialIndex {
     private static final long MAX_GRID_INDEX = (1L << BITS_PER_AXIS) - 1;   // 클램핑용
 
     @Override
-    public int toPageId(double lat, double lng) {
-        return (int) GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
+    public long toPageId(double lat, double lng) {
+        return GeoHash.toMorton(lat, lng, BITS_PER_AXIS);
     }
 
     /**
@@ -40,7 +45,7 @@ public class GeoHashIndex implements SpatialIndex {
      * 격자 순회 순서는 Morton 인터리빙 때문에 오름차순이 아니라 정렬이 따로 필요하다.
      */
     @Override
-    public List<Integer> getPageIds(double lat, double lng, double radiusKm) {
+    public List<Long> getPageIds(double lat, double lng, double radiusKm) {
         double deltaDegreeY = radiusKm / 110.0;
         double kmPerDegreeLon = 111.32 * Math.cos(Math.toRadians(lat));
         double deltaDegreeX = radiusKm / kmPerDegreeLon;
@@ -69,11 +74,11 @@ public class GeoHashIndex implements SpatialIndex {
         long minLngBits = Math.max(0, lngToBits(minLng) - 1);
         long maxLngBits = Math.min(MAX_GRID_INDEX, lngToBits(maxLng) + 1);
 
-        List<Integer> pageIds = new ArrayList<>();
+        List<Long> pageIds = new ArrayList<>();
         for (long latBits = minLatBits; latBits <= maxLatBits; latBits++) {
             for (long lngBits = minLngBits; lngBits <= maxLngBits; lngBits++) {
                 long morton = GeoHash.interleave(lngBits, latBits, BITS_PER_AXIS);
-                pageIds.add((int) morton);
+                pageIds.add(morton);
             }
         }
         Collections.sort(pageIds);

@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  */
 public class WarmupStore {
     private final Path storePath;
-    private final ConcurrentHashMap<Integer, AtomicLong> hitCounts;
+    private final ConcurrentHashMap<Long, AtomicLong> hitCounts;
     private static final Logger log = Logger.getLogger(WarmupStore.class.getName());
 
 
@@ -42,7 +42,7 @@ public class WarmupStore {
      * 히트가 아니라 수요를 센다. 호출자(PageCacheStore.getOrMiss)가 HIT/MISS 판정 전에
      * 부르므로 미스도 포함된다 — 히트만 세면 예열이 필요한 페이지가 후보에서 빠진다.
      */
-    public void recordAccess(int pageId){
+    public void recordAccess(long pageId){
         hitCounts.computeIfAbsent(pageId, k -> new AtomicLong()).incrementAndGet();
     }
 
@@ -50,9 +50,9 @@ public class WarmupStore {
      * 접근 횟수 내림차순 Top N. 순서가 계약이다 — 예열이 maxSize 에 걸리면 뒤쪽부터
      * 밀려나야 하므로, 받는 쪽은 이 순서를 유지하는 컬렉션에 담아야 한다.
      */
-    public List<Integer> getTopPageIds(int n) {
+    public List<Long> getTopPageIds(int n) {
         return hitCounts.entrySet().stream()
-                 .sorted(Comparator.comparingLong((Map.Entry<Integer, AtomicLong> e) -> e.getValue().get()).reversed())
+                 .sorted(Comparator.comparingLong((Map.Entry<Long, AtomicLong> e) -> e.getValue().get()).reversed())
                  .limit(n)
                  .map(Map.Entry::getKey)
                  .collect(Collectors.toList());
@@ -61,7 +61,7 @@ public class WarmupStore {
 
     public void saveHitCounts() {
         try (BufferedWriter writer = Files.newBufferedWriter(storePath)) {
-            for(Map.Entry<Integer, AtomicLong> entry : hitCounts.entrySet()){
+            for(Map.Entry<Long, AtomicLong> entry : hitCounts.entrySet()){
                 writer.write(entry.getKey() + " " + entry.getValue().get());
                 writer.newLine();
             }
@@ -86,7 +86,7 @@ public class WarmupStore {
             while((line = reader.readLine()) != null){
                 String[] split = line.trim().split(" ");
                 if(split.length == 2){
-                    int pageId = Integer.parseInt(split[0]);
+                    long pageId = Integer.parseInt(split[0]);
                     long hitCount = Long.parseLong(split[1]);
                     hitCounts.put(pageId, new AtomicLong(hitCount));
                 }
@@ -96,7 +96,7 @@ public class WarmupStore {
         }
     }
 
-    public long getHitCount(int pageId){
+    public long getHitCount(long pageId){
         AtomicLong hitCount = hitCounts.get(pageId);
         return hitCount != null ? hitCount.get() : 0;
     }

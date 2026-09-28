@@ -17,36 +17,36 @@ import java.util.function.BiConsumer;
  * 이 클래스는 pendingLoads 를 모르고, 거기서 빼는 것은 엔진의 일이다.
  */
 class PageLoadState<T> {
-    private final Map<Integer, List<T>> readyPages = new LinkedHashMap<>();
-    private final Map<Integer, CompletableFuture<List<T>>> waitingFutures = new LinkedHashMap<>();
-    private final Map<Integer, List<String>> pagesToLoad = new LinkedHashMap<>();
-    private final Map<Integer, CompletableFuture<List<T>>> myFutures = new LinkedHashMap<>();
+    private final Map<Long, List<T>> readyPages = new LinkedHashMap<>();
+    private final Map<Long, CompletableFuture<List<T>>> waitingFutures = new LinkedHashMap<>();
+    private final Map<Long, List<String>> pagesToLoad = new LinkedHashMap<>();
+    private final Map<Long, CompletableFuture<List<T>>> myFutures = new LinkedHashMap<>();
 
-    public void putReadyPage (int pageId, List<T> pageData) {
+    public void putReadyPage (long pageId, List<T> pageData) {
         readyPages.put(pageId, pageData);
     }
 
-    public boolean hasReadyPage (int pageId) {
+    public boolean hasReadyPage (long pageId) {
         return readyPages.containsKey(pageId);
     }
 
-    public List<T> getReadyPage (int pageId) {
+    public List<T> getReadyPage (long pageId) {
         return readyPages.get(pageId);
     }
 
-    public void addWaitingFuture (int pageId, CompletableFuture<List<T>> pendingLoad) {
+    public void addWaitingFuture (long pageId, CompletableFuture<List<T>> pendingLoad) {
         waitingFutures.put(pageId, pendingLoad);
     }
 
-    public boolean hasWaitingFuture (int pageId) {
+    public boolean hasWaitingFuture (long pageId) {
         return waitingFutures.containsKey(pageId);
     }
 
-    public CompletableFuture<List<T>> getWaitingFuture (int pageId) {
+    public CompletableFuture<List<T>> getWaitingFuture (long pageId) {
         return waitingFutures.get(pageId);
     }
 
-    public void addPageToLoad (int pageId, List<String> codes) {
+    public void addPageToLoad (long pageId, List<String> codes) {
         pagesToLoad.put(pageId, codes);
     }
 
@@ -61,15 +61,15 @@ class PageLoadState<T> {
                 .toList();
     }
 
-    public void forEachPageToLoad (BiConsumer<Integer, List<String>> consumer) {
+    public void forEachPageToLoad (BiConsumer<Long, List<String>> consumer) {
         pagesToLoad.forEach(consumer);
     }
 
-    public void registerMyFuture (int pageId, CompletableFuture<List<T>> future) {
+    public void registerMyFuture (long pageId, CompletableFuture<List<T>> future) {
         myFutures.put(pageId, future);
     }
 
-    public CompletableFuture<List<T>> getMyFuture (int pageId) {
+    public CompletableFuture<List<T>> getMyFuture (long pageId) {
         return myFutures.get(pageId);
     }
 
@@ -77,7 +77,7 @@ class PageLoadState<T> {
         myFutures.values().forEach(future -> future.completeExceptionally(e));
     }
 
-    public void forEachMyFuture (BiConsumer<Integer, CompletableFuture<List<T>>> consumer) {
+    public void forEachMyFuture (BiConsumer<Long, CompletableFuture<List<T>>> consumer) {
         myFutures.forEach(consumer);
     }
 }

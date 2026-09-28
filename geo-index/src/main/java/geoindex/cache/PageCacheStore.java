@@ -22,7 +22,7 @@ import java.util.List;
  */
 public class PageCacheStore<T> {
     private final CachePolicy policy;
-    private final LinkedHashMap<Integer, CacheEntry<T>> pageCache;
+    private final LinkedHashMap<Long, CacheEntry<T>> pageCache;
     private final EngineMetrics engineMetrics;
     private final WarmupStore warmupStore;
 
@@ -44,7 +44,7 @@ public class PageCacheStore<T> {
      *   세야 한다 — 히트만 세면 정작 예열이 필요한 페이지가 후보에서 영원히 빠진다.
      *   engineMetrics 의 hit/miss 카운터가 성능 쪽이고, 둘은 목적이 다르다.
      */
-    public synchronized PageResult<T> getOrMiss(int pageId, List<String> codes) {
+    public synchronized PageResult<T> getOrMiss(long pageId, List<String> codes) {
         CacheEntry<T> cached = pageCache.get(pageId);
 
         warmupStore.recordAccess(pageId);
@@ -62,7 +62,7 @@ public class PageCacheStore<T> {
     }
 
     /** 판정만 한다 — 메트릭도 접근 기록도 올리지 않는다. 같은 요청의 double-check 용. */
-    public synchronized List<T> peekIfCached(int pageId) {
+    public synchronized List<T> peekIfCached(long pageId) {
         CacheEntry<T> cached = pageCache.get(pageId);
         return (cached != null && !cached.isExpired()) ? cached.getData() : null;
     }
@@ -75,7 +75,7 @@ public class PageCacheStore<T> {
      *   캐시가 바뀐다. copyOf 는 불변이라 밖에서 못 고치고, null 원소를 저장 시점에
      *   거부한다 — 읽는 쪽에서 터지는 것보다 넣는 쪽에서 터지는 편이 원인에 가깝다.
      */
-    public synchronized void put(int pageId, List<T> data) {
+    public synchronized void put(long pageId, List<T> data) {
         // 이미 있는 키는 교체라 크기가 늘지 않는다. 그런데도 축출하면 애먼 항목이 나가고
         // evict 카운터가 오른다. containsKey 는 get 과 달리 접근 순서를 건드리지 않는다 —
         // get(pageId) != null 로 바꾸면 이 줄이 LRU 순서를 흔든다.
@@ -95,7 +95,7 @@ public class PageCacheStore<T> {
     /** access-order 에서는 첫 번째 키가 가장 오래 안 쓴 것이다. 정렬이나 탐색이 없다. */
     private void evictOne() {
         engineMetrics.incrementEvictCount();
-        Integer victim = pageCache.keySet().iterator().next();
+        Long victim = pageCache.keySet().iterator().next();
         pageCache.remove(victim);
     }
 
@@ -104,7 +104,7 @@ public class PageCacheStore<T> {
         pageCache.clear();
     }
 
-    public synchronized boolean isCached(int pageId) {
+    public synchronized boolean isCached(long pageId) {
         CacheEntry<T> entry = pageCache.get(pageId);
         return entry != null && !entry.isExpired();
     }

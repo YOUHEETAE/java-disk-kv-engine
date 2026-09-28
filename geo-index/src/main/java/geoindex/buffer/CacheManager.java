@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * flush 는 put 과 겹치지 않게 불린다는 전제 위에 있다.
  */
 public class CacheManager {
-    private final ConcurrentHashMap<Integer, Page> cache;
+    private final ConcurrentHashMap<Long, Page> cache;
     private final DiskManager diskManager;
     private final EngineMetrics engineMetrics;
     public CacheManager(DiskManager diskManager, EngineMetrics engineMetrics) {
@@ -46,7 +46,7 @@ public class CacheManager {
      * computeIfAbsent 는 매핑 함수가 null 을 반환하면 저장하지 않고 null 을 돌려준다.
      * "없으면 캐시에 넣지 않는다"가 별도 분기 없이 성립하는 이유다.
      */
-    public Page findPage(int pageId) {
+    public Page findPage(long pageId) {
         return cache.computeIfAbsent(pageId, diskManager::loadPage);
     }
 
@@ -58,7 +58,7 @@ public class CacheManager {
      * initializePage 가 recordCount 를 0 으로 되돌리고 flush 가 그대로 파일에 써서,
      * 기존 레코드가 예외 없이 사라진다.
      */
-    public Page getOrCreatePage(int pageId){
+    public Page getOrCreatePage(long pageId){
         return cache.computeIfAbsent(pageId, id -> {
             Page page = diskManager.loadPage(id);
             return page != null ? page : new Page(id);
@@ -71,13 +71,18 @@ public class CacheManager {
      * rebuild 에서 파일 배치가 공간 인접성을 따라간다. 해시 순서로 쓰면 인덱스가
      * 만들어낸 인접성이 파일에서 사라져, 반경 쿼리가 파일 전체에 흩어진 seek 이 된다.
      *
-     * 다만 overflow 페이지는 별도 번호 공간(32,768~)이라 자기 primary 와 멀리 떨어진다.
-     * 체인이 있는 칸의 지역성은 이 정렬로 해결되지 않는다.
+     * overflow 페이지도 이 정렬에 함께 올라탄다 — 번호가 primary 에 체인 순번을 더한 값이라
+     * 오름차순이 체인을 자기 primary 바로 뒤에 놓는다. 다만 이 배치가 실제로 seek 을 줄이는지는
+     * 측정하지 않았다: 균등 분포 더미로는 한 칸에 레코드가 몰리지 않아 체인이 생기지 않는다.
+     *
+     * 페이지를 다 쓴 뒤 sealIndex 를 부른다. 색인은 "지금 파일에 든 페이지 목록"이라 배치가
+     * 끝나는 이 지점에서만 정확하고, 그래서 flush 를 통과한 파일은 다시 열 수 있는 상태가 된다.
+     * 이것을 close 에만 두면 flush 로 끝내는 호출자가 미완성 파일을 남긴다.
      */
     public void flush() {
         engineMetrics.incrementFlushCount();
         List<Page> pages = new ArrayList<>(cache.values());
-        pages.sort(Comparator.comparingInt(Page::getPageId));
+        pages.sort(Comparator.comparingLong(Page::getPageId));
         for (Page page : pages) {
             // 락 없이 쓴다. 쓰기 경로가 잡는 것은 SpatialRecordManager 의 pageLocks(RWLock)라
             // 여기서 page 객체를 잠가도 상호배제가 성립하지 않는다 — 같은 락 객체를 잡아야 한다.
@@ -93,6 +98,7 @@ public class CacheManager {
                 engineMetrics.incrementFlushedPages();
             }
         }
+        diskManager.sealIndex();
     }
 
     public void clearCache() {

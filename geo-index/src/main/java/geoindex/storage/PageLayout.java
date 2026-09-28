@@ -8,7 +8,7 @@ import java.util.List;
  * 4KB 페이지 안쪽의 주소 체계 — Slotted Page 구조.
  *
  * 페이지 배치
- *   [0 ~ 15]    헤더 — recordCount(4) · freeSpaceStart(4) · magic(4) · overflowPageId(4)
+ *   [0 ~ 16]    헤더 — recordCount(4) · freeSpaceStart(4) · magic(4) · hasOverflow(4)
  *   [16 ~ ]     슬롯 디렉토리 — 앞에서 뒤로 자란다. 슬롯 하나가 offset(4) + length(4)
  *   [ ~ 4095]   레코드 — 뒤에서 앞으로 자란다. 레코드 하나가 valueLength(4) + value
  *
@@ -28,15 +28,15 @@ public class PageLayout {
     public static final int OFFSET_RECORD_COUNT = 0;    // 이 페이지에 든 레코드 수
     public static final int OFFSET_FREE_SPACE   = 4;    // 레코드가 뒤에서 자라며 내려온 경계
     public static final int OFFSET_MAGIC        = 8;    // 0xCAFEBABE — 초기화 여부 판별
-    public static final int OFFSET_OVERFLOW     = 12;   // 다음 overflow 페이지 번호
+    public static final int OFFSET_HAS_OVERFLOW = 12;   // 오버플로우 페이지 유무
     public static final int HEADER_SIZE         = 16;
     public static final int SLOT_SIZE           = 8;    // offset(4) + length(4)
 
+    private static final int NO_OVERFLOW_FLAG = 0;
+    private static final int HAS_OVERFLOW_FLAG = 1;
+
     /** 한 페이지에 담을 수 있는 최대 value 크기. 4096 - 헤더 16 - 슬롯 8 - 길이 4 */
     public static final int MAX_RECORD_SIZE = Page.PAGE_SIZE - HEADER_SIZE - SLOT_SIZE - 4;
-
-    /** overflowPageId 가 이 값이면 체인의 끝이다. */
-    public static final int NO_OVERFLOW         = -1;
 
     private PageLayout() {}
 
@@ -58,7 +58,7 @@ public class PageLayout {
     public static void initializePage(Page page) {
         setRecordCount(page, 0);
         setFreeSpaceStart(page, Page.PAGE_SIZE);
-        setOverflowPageId(page, NO_OVERFLOW);
+        markNoOverflow(page);
         page.buffer().putInt(OFFSET_MAGIC, 0xCAFEBABE);
         page.markDirty();
     }
@@ -130,8 +130,9 @@ public class PageLayout {
         return records;
     }
 
-    public static int getOverflowPageId(Page page) {
-        return page.buffer().getInt(OFFSET_OVERFLOW);
+    /** 다음 칸이 있는지만 남긴다 — 번호는 저장하지 않고 SpatialRecordManager 가 계산한다. */
+    public static boolean hasOverflow(Page page) {
+        return page.buffer().getInt(OFFSET_HAS_OVERFLOW) != NO_OVERFLOW_FLAG;
     }
 
     /**
@@ -141,9 +142,14 @@ public class PageLayout {
      * 이 호출이 유일한 변경인 페이지(꽉 차서 writeRecord 가 -1 을 낸 경우)가
      * flush 를 건너뛴다.
      */
-    public static void setOverflowPageId(Page page, int pageId) {
-        page.buffer().putInt(OFFSET_OVERFLOW, pageId);
+    public static void setHasOverflow(Page page) {
+        page.buffer().putInt(OFFSET_HAS_OVERFLOW, HAS_OVERFLOW_FLAG);
         page.markDirty();
+    }
+
+    /** 헤더를 처음 세울 때 체인 없음으로 둔다. 초기화 전용 — 운영 중에 체인을 끊는 경로는 없다. */
+    private static void markNoOverflow(Page page) {
+        page.buffer().putInt(OFFSET_HAS_OVERFLOW, NO_OVERFLOW_FLAG);
     }
 
     public static int getRecordCount(Page page) {
